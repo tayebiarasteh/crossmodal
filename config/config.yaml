@@ -17,12 +17,15 @@ display_stats_freq: 1 # valid freq is equal to this
 
 
 CrossModal:
-  mimic_master_csv: /PATH/MIMIC/csv.csv
+  mimic_master_csv: /PATH/MIMIC/nothree_master_list_20percenttest.csv
   mimic_image_root: /PATH/MIMIC
   mimic_reports_root: /PATH/MIMIC
+  chexpert_master_csv: /PATH/CheXpert-v1.0/nothree_master_list_20percenttest.csv
+  chexpert_reports_csv: /PATH/CheXpert-v1.0/chexpert_plus_reports.csv
+  chexpert_image_root: /PATH
 
   batch_size: 128
-  num_workers: 2
+  num_workers: 10
   max_text_tokens_clip_pubmed: 77
   max_text_tokens_biovilt: 512
 

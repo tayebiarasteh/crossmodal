@@ -1730,6 +1730,10 @@ class PredictionCrossModalSettingB:
         rng.shuffle(cand_idx)
         return cand_idx
 
+    def _make_numpy_rng(self, seed_val):
+        seed_val = int(seed_val) % (2 ** 32 - 1)
+        return np.random.RandomState(seed_val)
+
     def run_settingB(self, emb_dict):
         Z_img = emb_dict["Z_img"].float().to(self.device)
         Z_txt = emb_dict["Z_txt"].float().to(self.device)
@@ -1761,7 +1765,7 @@ class PredictionCrossModalSettingB:
 
             for trial_id in range(self.n_trials):
                 seed = self._seed_for_setting_b(trial_id)
-                rng = np.random.RandomState(seed + q_idx * 100003)
+                rng = self._make_numpy_rng(seed + q_idx * 100003)
 
                 cand_idx = self._build_setting_b_candidate_pool(
                     query_idx=q_idx,
@@ -2172,6 +2176,10 @@ class PredictionCrossModalSettingB_BiomedCLIP:
         rng.shuffle(cand_idx)
         return cand_idx
 
+    def _make_numpy_rng(self, seed_val):
+        seed_val = int(seed_val) % (2 ** 32 - 1)
+        return np.random.RandomState(seed_val)
+
     def run_settingB(self, emb_dict):
         Z_img = emb_dict["Z_img"].float().to(self.device)
         Z_txt = emb_dict["Z_txt"].float().to(self.device)
@@ -2203,7 +2211,7 @@ class PredictionCrossModalSettingB_BiomedCLIP:
 
             for trial_id in range(self.n_trials):
                 seed = self._seed_for_setting_b(trial_id)
-                rng = np.random.RandomState(seed + q_idx * 100003)
+                rng = self._make_numpy_rng(seed + q_idx * 100003)
 
                 cand_idx = self._build_setting_b_candidate_pool(
                     query_idx=q_idx,
@@ -2646,6 +2654,10 @@ class PredictionCrossModalSettingB_BioViLT:
         rng.shuffle(cand_idx)
         return cand_idx
 
+    def _make_numpy_rng(self, seed_val):
+        seed_val = int(seed_val) % (2 ** 32 - 1)
+        return np.random.RandomState(seed_val)
+
     def run_settingB(self, emb_dict):
         Z_img = emb_dict["Z_img"].float().to(self.device)
         Z_txt = emb_dict["Z_txt"].float().to(self.device)
@@ -2677,7 +2689,7 @@ class PredictionCrossModalSettingB_BioViLT:
 
             for trial_id in range(self.n_trials):
                 seed = self._seed_for_setting_b(trial_id)
-                rng = np.random.RandomState(seed + q_idx * 100003)
+                rng = self._make_numpy_rng(seed + q_idx * 100003)
 
                 cand_idx = self._build_setting_b_candidate_pool(
                     query_idx=q_idx,
