@@ -485,30 +485,36 @@ class PredictionCrossModalSettingA:
             "bootstrap_df": pd.DataFrame(all_boot_rows),
         }
 
-    def save_predictions_csv(self, raw_trial_df):
+    def save_predictions_csv(self, raw_trial_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"predictions_settingA_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
+            f"predictions_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         raw_trial_df.to_csv(out_path, index=False)
 
-    def save_bootstrap_csv(self, bootstrap_df):
+    def save_bootstrap_csv(self, bootstrap_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"bootstrap_settingA_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
+            f"bootstrap_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         bootstrap_df.to_csv(out_path, index=False)
 
-    def save_summary_csv(self, summary_df):
+    def save_summary_csv(self, summary_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"summary_settingA_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
+            f"summary_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         summary_df.to_csv(out_path, index=False)
 
-    def print_and_save_stats(self, summary_df):
+    def print_and_save_stats(self, summary_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
+
         msg = (
             f"\n\n----------------------------------------------------------------------------------------\n"
+            f"setting: {setting_name}\n"
             f"dataset: {self.dataset_name}\n"
             f"model: {self.model_name}\n"
             f"variant: {self.variant_name}\n"
@@ -528,7 +534,7 @@ class PredictionCrossModalSettingA:
 
         out_path = os.path.join(
             self.out_dir,
-            f"Test_on_settingA_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.txt",
+            f"Test_on_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.txt",
         )
         with open(out_path, "a") as f:
             f.write(msg)
@@ -910,32 +916,38 @@ class PredictionCrossModalSettingA_BioViLT:
             "bootstrap_df": pd.DataFrame(all_boot_rows),
         }
 
-    def save_predictions_csv(self, raw_trial_df):
+    def save_predictions_csv(self, raw_trial_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"predictions_settingA_{self.dataset_name}_{self.variant_name}_biovilt_split_{self.split_name}.csv",
+            f"predictions_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         raw_trial_df.to_csv(out_path, index=False)
 
-    def save_bootstrap_csv(self, bootstrap_df):
+    def save_bootstrap_csv(self, bootstrap_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"bootstrap_settingA_{self.dataset_name}_{self.variant_name}_biovilt_split_{self.split_name}.csv",
+            f"bootstrap_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         bootstrap_df.to_csv(out_path, index=False)
 
-    def save_summary_csv(self, summary_df):
+    def save_summary_csv(self, summary_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"summary_settingA_{self.dataset_name}_{self.variant_name}_biovilt_split_{self.split_name}.csv",
+            f"summary_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         summary_df.to_csv(out_path, index=False)
 
-    def print_and_save_stats(self, summary_df):
+    def print_and_save_stats(self, summary_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
+
         msg = (
             f"\n\n----------------------------------------------------------------------------------------\n"
+            f"setting: {setting_name}\n"
             f"dataset: {self.dataset_name}\n"
-            f"model: microsoft/BiomedVLP-BioViL-T\n"
+            f"model: {self.model_name}\n"
             f"variant: {self.variant_name}\n"
             f"split: {self.split_name}\n\n"
         )
@@ -953,7 +965,7 @@ class PredictionCrossModalSettingA_BioViLT:
 
         out_path = os.path.join(
             self.out_dir,
-            f"Test_on_settingA_{self.dataset_name}_{self.variant_name}_biovilt_split_{self.split_name}.txt",
+            f"Test_on_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.txt",
         )
         with open(out_path, "a") as f:
             f.write(msg)
@@ -1289,30 +1301,36 @@ class PredictionCrossModalSettingA_BiomedCLIP:
             "bootstrap_df": pd.DataFrame(all_boot_rows),
         }
 
-    def save_predictions_csv(self, raw_trial_df):
+    def save_predictions_csv(self, raw_trial_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"predictions_settingA_{self.dataset_name}_{self.variant_name}_biomedclip_split_{self.split_name}.csv",
+            f"predictions_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         raw_trial_df.to_csv(out_path, index=False)
 
-    def save_bootstrap_csv(self, bootstrap_df):
+    def save_bootstrap_csv(self, bootstrap_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"bootstrap_settingA_{self.dataset_name}_{self.variant_name}_biomedclip_split_{self.split_name}.csv",
+            f"bootstrap_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         bootstrap_df.to_csv(out_path, index=False)
 
-    def save_summary_csv(self, summary_df):
+    def save_summary_csv(self, summary_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
         out_path = os.path.join(
             self.out_dir,
-            f"summary_settingA_{self.dataset_name}_{self.variant_name}_biomedclip_split_{self.split_name}.csv",
+            f"summary_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.csv",
         )
         summary_df.to_csv(out_path, index=False)
 
-    def print_and_save_stats(self, summary_df):
+    def print_and_save_stats(self, summary_df, setting_name="A"):
+        setting_name = str(setting_name).upper()
+
         msg = (
             f"\n\n----------------------------------------------------------------------------------------\n"
+            f"setting: {setting_name}\n"
             f"dataset: {self.dataset_name}\n"
             f"model: {self.model_name}\n"
             f"variant: {self.variant_name}\n"
@@ -1332,7 +1350,7 @@ class PredictionCrossModalSettingA_BiomedCLIP:
 
         out_path = os.path.join(
             self.out_dir,
-            f"Test_on_settingA_{self.dataset_name}_{self.variant_name}_biomedclip_split_{self.split_name}.txt",
+            f"Test_on_setting{setting_name}_{self.dataset_name}_{self.variant_name}_{self.model_name.replace('/', '_')}_split_{self.split_name}.txt",
         )
         with open(out_path, "a") as f:
             f.write(msg)
