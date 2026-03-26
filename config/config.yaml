@@ -1,0 +1,33 @@
+runtime:
+  use_amp: true # useful for speed
+
+network_output_path: network_data/
+output_data_path: output_data/
+tb_logs_path: tensor_board_logs/
+stat_log_path: stat_logs
+checkpoint_name: checkpoint.tar
+trained_model_name: trained_model.pth
+hf_login: "xxxxxxxxxxx"
+
+
+# changeable items:
+target_dir: /PATH/crossmodal/
+display_stats_freq: 1 # valid freq is equal to this
+
+
+
+CrossModal:
+  mimic_master_csv: /PATH/MIMIC/csv.csv
+  mimic_image_root: /PATH/MIMIC
+  mimic_reports_root: /PATH/MIMIC
+
+  batch_size: 128
+  num_workers: 2
+  max_text_tokens_clip_pubmed: 77
+  max_text_tokens_biovilt: 512
+
+  base_seed: 20260222
+  n_trials_settingA: 20
+  n_trials_settingB: 10
+  n_bootstrap: 1000
+  settingB_N: 10000
