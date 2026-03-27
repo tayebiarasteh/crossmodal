@@ -35,6 +35,7 @@ epsilon = 1e-15
 
 
 
+
 def get_valid_num_groups(num_channels: int, max_groups: int = 32) -> int:
     divisors = [g for g in range(1, num_channels + 1) if num_channels % g == 0]
     valid = [g for g in divisors if g <= max_groups]
@@ -73,22 +74,23 @@ def replace_inplace_relu(module: nn.Module):
 
 
 
-class BioViLTProjectionHeadDPModel(nn.Module):
+class BioViLTFeatureExtractor:
     """
-    Train only:
-        - image_model.projector
-        - text_model.cls_projection_head
+    Frozen feature extractor used once before DP training.
+    Extracts:
+        - image pre-projection features for image_model.projector
+        - text CLS features before text_model.cls_projection_head
     """
 
-    def __init__(self, model_name="microsoft/BiomedVLP-BioViL-T", max_text_tokens=256):
-        super().__init__()
-
+    def __init__(self, model_name="microsoft/BiomedVLP-BioViL-T", max_text_tokens=256, device="cuda"):
         self.model_name = model_name
         self.max_text_tokens = int(max_text_tokens)
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
 
         self.image_engine = get_image_inference(ImageModelType.BIOVIL_T)
         self.image_transform = self.image_engine.transform
-        self.image_model = self.image_engine.model
+        self.image_model = self.image_engine.model.to(self.device)
+        self.image_model.eval()
 
         self.text_tokenizer = AutoTokenizer.from_pretrained(
             model_name,
@@ -99,41 +101,24 @@ class BioViLTProjectionHeadDPModel(nn.Module):
             model_name,
             trust_remote_code=True,
             use_safetensors=False,
-        )
+        ).to(self.device)
+        self.text_model.eval()
 
-    def make_dp_compatible(self, max_groups=32):
-        replace_bn_with_gn(self.image_model, max_groups=max_groups)
-        replace_inplace_relu(self.image_model)
-
-    def freeze_backbones_and_unfreeze_projection_heads(self):
-        for p in self.image_model.parameters():
-            p.requires_grad = False
-        for p in self.text_model.parameters():
-            p.requires_grad = False
-
-        for p in self.image_model.projector.parameters():
-            p.requires_grad = True
-
-        for p in self.text_model.cls_projection_head.parameters():
-            p.requires_grad = True
-
-        trainable_param_num = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"\nTrainable projection-head parameters: {trainable_param_num:,}")
-        print('----------------------------------------------------\n')
-
-    def _forward_image_projected(self, image_paths, device):
+    def extract_image_backbone_features(self, image_paths):
         image_tensors = []
         for p in image_paths:
             img = Image.open(Path(p))
             x = self.image_transform(img)
             image_tensors.append(x)
 
-        x = torch.stack(image_tensors, dim=0).to(device, non_blocking=True)
-        out = self.image_model(x)
-        z_img = out.projected_global_embedding
-        return z_img
+        x = torch.stack(image_tensors, dim=0).to(self.device, non_blocking=True)
 
-    def _forward_text_projected(self, report_texts, device):
+        with torch.no_grad():
+            img_features = self.image_model.encoder(x)
+
+        return img_features.detach().cpu()
+
+    def extract_text_backbone_features(self, report_texts):
         tok = self.text_tokenizer(
             report_texts,
             padding=True,
@@ -141,23 +126,79 @@ class BioViLTProjectionHeadDPModel(nn.Module):
             max_length=self.max_text_tokens,
             return_tensors="pt",
         )
-        tok = {k: v.to(device, non_blocking=True) for k, v in tok.items()}
+        tok = {k: v.to(self.device, non_blocking=True) for k, v in tok.items()}
 
-        z_txt = self.text_model.get_projected_text_embeddings(
-            input_ids=tok["input_ids"],
-            attention_mask=tok["attention_mask"],
+        with torch.no_grad():
+            bert_out = self.text_model.bert(
+                input_ids=tok["input_ids"],
+                attention_mask=tok["attention_mask"],
+            )
+            txt_features = bert_out.last_hidden_state[:, 0, :]
+
+        return txt_features.detach().cpu()
+
+
+
+
+
+class BioViLTProjectionHeadDPModel(nn.Module):
+    """
+    Tiny DP model trained on cached features only.
+
+    Train only:
+        - image_projector
+        - text_projector
+    """
+
+    def __init__(self, model_name="microsoft/BiomedVLP-BioViL-T"):
+        super().__init__()
+
+        image_engine = get_image_inference(ImageModelType.BIOVIL_T)
+        image_model = image_engine.model
+        replace_bn_with_gn(image_model, max_groups=32)
+        replace_inplace_relu(image_model)
+
+        text_model = AutoModel.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+            use_safetensors=False,
         )
-        return z_txt
 
-    def forward(self, image_paths, report_texts):
-        device = next(self.parameters()).device
+        self.image_projector = image_model.projector
+        self.text_projector = text_model.cls_projection_head
 
-        z_img = self._forward_image_projected(image_paths=image_paths, device=device)
-        z_txt = self._forward_text_projected(report_texts=report_texts, device=device)
+        for p in self.image_projector.parameters():
+            p.requires_grad = True
+        for p in self.text_projector.parameters():
+            p.requires_grad = True
+
+        trainable_param_num = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"\nTrainable projection-head parameters: {trainable_param_num:,}")
+        print('----------------------------------------------------\n')
+
+    def forward(self, img_features, txt_features):
+        # cached image features may come as [B, 512]
+        # projector expects [B, 512, 1, 1]
+        if img_features.ndim == 2:
+            img_features = img_features.unsqueeze(-1).unsqueeze(-1)
+        elif img_features.ndim == 4:
+            pass
+        else:
+            raise ValueError(f"Unexpected img_features shape: {tuple(img_features.shape)}")
+
+        # cached text features should be [B, 768]
+        if txt_features.ndim != 2:
+            raise ValueError(f"Unexpected txt_features shape: {tuple(txt_features.shape)}")
+
+        z_img = self.image_projector(img_features)
+        z_img = z_img.flatten(1)
+
+        z_txt = self.text_projector(txt_features)
 
         z_img = F.normalize(z_img.float(), p=2, dim=-1)
         z_txt = F.normalize(z_txt.float(), p=2, dim=-1)
         return z_img, z_txt
+
 
 
 
@@ -265,9 +306,12 @@ class TrainingCrossModalDP:
 
         with torch.no_grad():
             for batch in tqdm(valid_loader):
+                img_features = batch["img_features"].to(self.device, non_blocking=True)
+                txt_features = batch["txt_features"].to(self.device, non_blocking=True)
+
                 z_img, z_txt = self.model(
-                    image_paths=batch["image_paths"],
-                    report_texts=batch["report_texts"],
+                    img_features=img_features,
+                    txt_features=txt_features,
                 )
 
                 loss = self.symmetric_infonce(
@@ -286,8 +330,6 @@ class TrainingCrossModalDP:
         val_loss = float(np.mean(batch_losses)) if len(batch_losses) > 0 else 0.0
         val_recall1 = self._compute_recall_at_1(Z_img, Z_txt)
         return val_loss, val_recall1
-
-
 
     def train_DP_epoch(self, train_loader, valid_loader=None, num_epochs=5):
         self.params = read_config(self.cfg_path)
@@ -309,9 +351,12 @@ class TrainingCrossModalDP:
                     self.model.train()
                     self.optimiser.zero_grad()
 
+                    img_features = batch["img_features"].to(self.device, non_blocking=True)
+                    txt_features = batch["txt_features"].to(self.device, non_blocking=True)
+
                     z_img, z_txt = self.model(
-                        image_paths=batch["image_paths"],
-                        report_texts=batch["report_texts"],
+                        img_features=img_features,
+                        txt_features=txt_features,
                     )
 
                     loss = self.symmetric_infonce(
@@ -392,7 +437,6 @@ class TrainingCrossModalDP:
                 valid_recall1=valid_recall1,
             )
 
-
     def savings_prints(self, iteration_hours, iteration_mins, iteration_secs,
                        total_hours, total_mins, total_secs,
                        train_loss, total_time, valid_loss=None, valid_recall1=None):
@@ -402,6 +446,71 @@ class TrainingCrossModalDP:
 
         epsilon_now = self.privacy_engine.get_epsilon(float(self.params['DP']['delta']))
         delta_now = float(self.params['DP']['delta'])
+
+        network_dir = os.path.join(self.params['target_dir'], self.params['network_output_path'])
+        os.makedirs(network_dir, exist_ok=True)
+
+        # save regular checkpoint every epoch
+        torch.save(
+            {
+                'epoch': self.epoch,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimiser.state_dict(),
+                'model_info': self.model_info,
+                'best_val_recall1': self.best_val_recall1,
+                'train_loss': train_loss,
+                'valid_loss': valid_loss,
+                'valid_recall1': valid_recall1,
+                'epsilon': epsilon_now,
+                'delta': delta_now,
+            },
+            os.path.join(network_dir, self.params['checkpoint_name'])
+        )
+
+        # save opacus privacy checkpoint every epoch
+        self.privacy_engine.save_checkpoint(
+            path=os.path.join(network_dir, self.params['DP_checkpoint_name']),
+            module=self.model,
+            optimizer=self.optimiser
+        )
+
+        # optional epoch-wise full model snapshots
+        torch.save(
+            self.model.state_dict(),
+            os.path.join(network_dir, f"epoch{self.epoch}_{self.params['trained_model_name']}")
+        )
+
+        # save best model based on validation Recall@1 if validation exists
+        if valid_recall1 is not None:
+            if valid_recall1 < self.best_val_recall1:
+                self.best_val_recall1 = valid_recall1
+
+                torch.save(
+                    self.model.state_dict(),
+                    os.path.join(network_dir, self.params['trained_model_name'])
+                )
+
+                torch.save(
+                    {
+                        'epoch': self.epoch,
+                        'model_state_dict': self.model.state_dict(),
+                        'optimizer_state_dict': self.optimiser.state_dict(),
+                        'model_info': self.model_info,
+                        'best_val_recall1': self.best_val_recall1,
+                        'train_loss': train_loss,
+                        'valid_loss': valid_loss,
+                        'valid_recall1': valid_recall1,
+                        'epsilon': epsilon_now,
+                        'delta': delta_now,
+                    },
+                    os.path.join(network_dir, f"best_{self.params['checkpoint_name']}")
+                )
+
+                self.privacy_engine.save_checkpoint(
+                    path=os.path.join(network_dir, f"best_{self.params['DP_checkpoint_name']}"),
+                    module=self.model,
+                    optimizer=self.optimiser
+                )
 
         print('----------------------------------------------------------------------------------------')
         print(
@@ -432,5 +541,3 @@ class TrainingCrossModalDP:
         os.makedirs(os.path.dirname(stats_path), exist_ok=True)
         with open(stats_path, 'a') as f:
             f.write(msg)
-
-

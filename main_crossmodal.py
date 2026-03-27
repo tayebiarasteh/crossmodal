@@ -20,11 +20,12 @@ import json
 from torch.utils.data import DataLoader
 from opacus import PrivacyEngine
 from opacus.validators import ModuleValidator
+from tqdm import tqdm
 
 from config.serde import open_experiment, create_experiment, delete_experiment, write_config, read_config
-from data.data_provider import mimic_retrieval_test_data_loader_2D, mimic_retrieval_collate_fn, chexpert_retrieval_test_data_loader_2D, chexpert_retrieval_collate_fn, mimic_biovilt_dp_data_loader_2D, mimic_biovilt_dp_collate_fn
+from data.data_provider import mimic_retrieval_test_data_loader_2D, mimic_retrieval_collate_fn, chexpert_retrieval_test_data_loader_2D, chexpert_retrieval_collate_fn, mimic_biovilt_dp_data_loader_2D, mimic_biovilt_dp_collate_fn, CachedProjectionDataset, cached_projection_collate_fn
 from Evaluations_crossmodal import PredictionCrossModalSettingA, PredictionCrossModalSettingA_BioViLT, PredictionCrossModalSettingA_BiomedCLIP, PredictionCrossModalSettingB, PredictionCrossModalSettingB_BiomedCLIP, PredictionCrossModalSettingB_BioViLT
-from Train_Valid_crossmodal import TrainingCrossModalDP, BioViLTProjectionHeadDPModel
+from Train_Valid_crossmodal import TrainingCrossModalDP, BioViLTProjectionHeadDPModel, BioViLTFeatureExtractor
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -108,11 +109,29 @@ def main_test_setting_bootstrap(global_config_path="/PATH/config/config.yaml", m
 
 
 
+def precompute_cached_features(feature_extractor, data_loader, save_prefix):
+    all_img = []
+    all_txt = []
+
+    for batch in tqdm(data_loader):
+        img_features = feature_extractor.extract_image_backbone_features(batch["image_paths"])
+        txt_features = feature_extractor.extract_text_backbone_features(batch["report_texts"])
+        all_img.append(img_features)
+        all_txt.append(txt_features)
+
+    img_tensor = torch.cat(all_img, dim=0)
+    txt_tensor = torch.cat(all_txt, dim=0)
+
+    torch.save(img_tensor, save_prefix + "_img.pt")
+    torch.save(txt_tensor, save_prefix + "_txt.pt")
+
+    return img_tensor, txt_tensor
+
+
+
 
 def main_train_biovilt_DP(global_config_path="/PATH/config/config.yaml", valid=True, resume=False,
-                          experiment_name='biovilt_dp_head', dataset_name='mimic', lr=1e-3):
-    if dataset_name != 'mimic':
-        raise ValueError("This script is currently written for MIMIC only.")
+                          experiment_name='biovilt_dp_head', lr=1e-3):
 
     if resume:
         params = open_experiment(experiment_name, global_config_path)
@@ -121,8 +140,69 @@ def main_train_biovilt_DP(global_config_path="/PATH/config/config.yaml", valid=T
 
     cfg_path = params["cfg_path"]
 
-    train_dataset = mimic_biovilt_dp_data_loader_2D(cfg_path=cfg_path, mode='train')
-    valid_dataset = mimic_biovilt_dp_data_loader_2D(cfg_path=cfg_path, mode='valid')
+    # raw paired dataset for feature caching
+    train_dataset_raw = mimic_biovilt_dp_data_loader_2D(cfg_path=cfg_path, mode='train')
+    valid_dataset_raw = mimic_biovilt_dp_data_loader_2D(cfg_path=cfg_path, mode='test')
+
+    raw_train_loader = DataLoader(
+        dataset=train_dataset_raw,
+        batch_size=int(params["CrossModal"]["feature_cache_batch_size"]),
+        pin_memory=True,
+        drop_last=False,
+        shuffle=False,
+        num_workers=int(params["CrossModal"]["num_workers"]),
+        collate_fn=mimic_biovilt_dp_collate_fn,
+        persistent_workers=True,
+    )
+
+    raw_valid_loader = DataLoader(
+        dataset=valid_dataset_raw,
+        batch_size=int(params["CrossModal"]["feature_cache_batch_size"]),
+        pin_memory=True,
+        drop_last=False,
+        shuffle=False,
+        num_workers=8,
+        collate_fn=mimic_biovilt_dp_collate_fn,
+        persistent_workers=True,
+    )
+
+    # cache frozen features
+    cache_dir = os.path.join(params["target_dir"], 'cached_biovilt_features')
+    os.makedirs(cache_dir, exist_ok=True)
+
+    train_img_path = os.path.join(cache_dir, "train_img.pt")
+    train_txt_path = os.path.join(cache_dir, "train_txt.pt")
+    valid_img_path = os.path.join(cache_dir, "test_img.pt")
+    valid_txt_path = os.path.join(cache_dir, "test_txt.pt")
+
+    if all(os.path.exists(p) for p in [train_img_path, train_txt_path, valid_img_path, valid_txt_path]):
+        train_img = torch.load(train_img_path, map_location="cpu")
+        train_txt = torch.load(train_txt_path, map_location="cpu")
+        valid_img = torch.load(valid_img_path, map_location="cpu")
+        valid_txt = torch.load(valid_txt_path, map_location="cpu")
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        feature_extractor = BioViLTFeatureExtractor(
+            model_name="microsoft/BiomedVLP-BioViL-T",
+            max_text_tokens=int(params["CrossModal"]["max_text_tokens_biovilt"]),
+            device=device,
+        )
+
+        train_img, train_txt = precompute_cached_features(
+            feature_extractor=feature_extractor,
+            data_loader=raw_train_loader,
+            save_prefix=os.path.join(cache_dir, "train"),
+        )
+        valid_img, valid_txt = precompute_cached_features(
+            feature_extractor=feature_extractor,
+            data_loader=raw_valid_loader,
+            save_prefix=os.path.join(cache_dir, "test"),
+        )
+
+    # cached tiny-head dataset
+    train_dataset = CachedProjectionDataset(train_img, train_txt)
+    valid_dataset = CachedProjectionDataset(valid_img, valid_txt)
 
     train_loader = DataLoader(
         dataset=train_dataset,
@@ -130,8 +210,8 @@ def main_train_biovilt_DP(global_config_path="/PATH/config/config.yaml", valid=T
         pin_memory=True,
         drop_last=True,
         shuffle=True,
-        num_workers=int(params["CrossModal"]["num_workers"]),
-        collate_fn=mimic_biovilt_dp_collate_fn,
+        num_workers=4,
+        collate_fn=cached_projection_collate_fn,
         persistent_workers=True,
     )
 
@@ -143,18 +223,13 @@ def main_train_biovilt_DP(global_config_path="/PATH/config/config.yaml", valid=T
             pin_memory=True,
             drop_last=False,
             shuffle=False,
-            num_workers=max(1, int(params["CrossModal"]["num_workers"]) // 2),
-            collate_fn=mimic_biovilt_dp_collate_fn,
+            num_workers=2,
+            collate_fn=cached_projection_collate_fn,
             persistent_workers=True,
         )
 
-    model = BioViLTProjectionHeadDPModel(
-        model_name="microsoft/BiomedVLP-BioViL-T",
-        max_text_tokens=int(params["CrossModal"]["max_text_tokens_biovilt"]),
-    )
-
-    model.make_dp_compatible(max_groups=int(params["DP"]["gn_num_groups"]))
-    model.freeze_backbones_and_unfreeze_projection_heads()
+    # tiny cached-head model
+    model = BioViLTProjectionHeadDPModel(model_name="microsoft/BiomedVLP-BioViL-T")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
@@ -165,7 +240,7 @@ def main_train_biovilt_DP(global_config_path="/PATH/config/config.yaml", valid=T
         print("Opacus validation warnings/errors:")
         for err in errors:
             print(err)
-        raise ValueError("Model is still not DP-compatible.")
+        raise ValueError("Cached-head model is still not DP-compatible.")
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
@@ -222,13 +297,17 @@ def main_train_biovilt_DP(global_config_path="/PATH/config/config.yaml", valid=T
 
 
 
+
+
+
+
 if __name__ == '__main__':
     global_config_path = "/PATH/crossmodal/config/config.yaml"
 
-    delete_experiment(global_config_path=global_config_path, experiment_name='biovilt_dp_head_lr1e3_eps11')
+    delete_experiment(global_config_path=global_config_path, experiment_name='biovilt_dp_head_temp')
 
     main_train_biovilt_DP(global_config_path=global_config_path, valid=True, resume=False,
-                          experiment_name='biovilt_dp_head_lr1e3_eps11', dataset_name='mimic', lr=1e-3)
+                          experiment_name='biovilt_dp_head_temp', lr=5e-4)
 
 
     # model_name = "microsoft/BiomedVLP-BioViL-T"

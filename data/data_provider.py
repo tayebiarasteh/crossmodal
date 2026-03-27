@@ -153,6 +153,32 @@ def mimic_biovilt_dp_collate_fn(batch):
 
 
 
+class CachedProjectionDataset(Dataset):
+    def __init__(self, img_features, txt_features):
+        self.img_features = img_features
+        self.txt_features = txt_features
+
+    def __len__(self):
+        return self.img_features.shape[0]
+
+    def __getitem__(self, idx):
+        return {
+            "img_features": self.img_features[idx],
+            "txt_features": self.txt_features[idx],
+            "row_id": int(idx),
+        }
+
+
+def cached_projection_collate_fn(batch):
+    return {
+        "img_features": torch.stack([x["img_features"] for x in batch], dim=0),
+        "txt_features": torch.stack([x["txt_features"] for x in batch], dim=0),
+        "row_ids": [x["row_id"] for x in batch],
+    }
+
+
+
+
 
 class mimic_retrieval_test_data_loader_2D(Dataset):
     """

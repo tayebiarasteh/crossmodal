@@ -3,7 +3,7 @@ CrossModal:
   mimic_image_root: /PATH
   mimic_reports_root: /PATH
   chexpert_master_csv: /PATH.csv
-  chexpert_reports_csv: /PATH/chexpert_plus_reports.csv
+  chexpert_reports_csv: /PATH.csv
   chexpert_image_root: /PATH
 
   batch_size: 32
@@ -17,12 +17,12 @@ CrossModal:
   n_trials_settingB: 10
   n_bootstrap: 1000
   settingB_N: 10000
-
+  feature_cache_batch_size: 64
 
 Network:
   weight_decay: 0.01
   amsgrad: false
-  num_epochs: 5
+  num_epochs: 150
 
 network_output_path: network_data/
 output_data_path: output_data/
