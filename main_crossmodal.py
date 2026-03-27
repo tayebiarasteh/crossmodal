@@ -1,6 +1,6 @@
 """
 Created on March 26, 2026.
-main_groundingcrossmodal
+main_crossmodal.py
 
 https://github.com/tayebiarasteh/crossmodal/
 """
@@ -8,7 +8,6 @@ https://github.com/tayebiarasteh/crossmodal/
 import pdb
 import torch
 import os
-from torch.utils.data import Dataset
 from torchvision import transforms, models
 import numpy as np
 from torch import nn
@@ -19,11 +18,13 @@ matplotlib.use('Agg')
 import yaml
 import json
 from torch.utils.data import DataLoader
+from opacus import PrivacyEngine
+from opacus.validators import ModuleValidator
 
-from config.serde import open_experiment, create_experiment, delete_experiment, write_config
-from data.data_provider import mimic_retrieval_test_data_loader_2D, mimic_retrieval_collate_fn, chexpert_retrieval_test_data_loader_2D, chexpert_retrieval_collate_fn
+from config.serde import open_experiment, create_experiment, delete_experiment, write_config, read_config
+from data.data_provider import mimic_retrieval_test_data_loader_2D, mimic_retrieval_collate_fn, chexpert_retrieval_test_data_loader_2D, chexpert_retrieval_collate_fn, mimic_biovilt_dp_data_loader_2D, mimic_biovilt_dp_collate_fn
 from Evaluations_crossmodal import PredictionCrossModalSettingA, PredictionCrossModalSettingA_BioViLT, PredictionCrossModalSettingA_BiomedCLIP, PredictionCrossModalSettingB, PredictionCrossModalSettingB_BiomedCLIP, PredictionCrossModalSettingB_BioViLT
-from config.serde import read_config
+from Train_Valid_crossmodal import TrainingCrossModalDP, BioViLTProjectionHeadDPModel
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -107,39 +108,136 @@ def main_test_setting_bootstrap(global_config_path="/PATH/config/config.yaml", m
 
 
 
+
+def main_train_biovilt_DP(global_config_path="/PATH/config/config.yaml", valid=True, resume=False,
+                          experiment_name='biovilt_dp_head', dataset_name='mimic', lr=1e-3):
+    if dataset_name != 'mimic':
+        raise ValueError("This script is currently written for MIMIC only.")
+
+    if resume:
+        params = open_experiment(experiment_name, global_config_path)
+    else:
+        params = create_experiment(experiment_name, global_config_path)
+
+    cfg_path = params["cfg_path"]
+
+    train_dataset = mimic_biovilt_dp_data_loader_2D(cfg_path=cfg_path, mode='train')
+    valid_dataset = mimic_biovilt_dp_data_loader_2D(cfg_path=cfg_path, mode='valid')
+
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=int(params['DP']['logical_batch_size']),
+        pin_memory=True,
+        drop_last=True,
+        shuffle=True,
+        num_workers=int(params["CrossModal"]["num_workers"]),
+        collate_fn=mimic_biovilt_dp_collate_fn,
+        persistent_workers=True,
+    )
+
+    valid_loader = None
+    if valid:
+        valid_loader = DataLoader(
+            dataset=valid_dataset,
+            batch_size=int(params['DP']['logical_batch_size']),
+            pin_memory=True,
+            drop_last=False,
+            shuffle=False,
+            num_workers=max(1, int(params["CrossModal"]["num_workers"]) // 2),
+            collate_fn=mimic_biovilt_dp_collate_fn,
+            persistent_workers=True,
+        )
+
+    model = BioViLTProjectionHeadDPModel(
+        model_name="microsoft/BiomedVLP-BioViL-T",
+        max_text_tokens=int(params["CrossModal"]["max_text_tokens_biovilt"]),
+    )
+
+    model.make_dp_compatible(max_groups=int(params["DP"]["gn_num_groups"]))
+    model.freeze_backbones_and_unfreeze_projection_heads()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+    model.train()
+
+    errors = ModuleValidator.validate(model)
+    if len(errors) != 0:
+        print("Opacus validation warnings/errors:")
+        for err in errors:
+            print(err)
+        raise ValueError("Model is still not DP-compatible.")
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(
+        trainable_params,
+        lr=lr,
+        weight_decay=float(params['Network']['weight_decay']),
+    )
+
+    model_info = params['Network']
+    model_info['lr'] = lr
+    model_info['batch_size'] = int(params['DP']['logical_batch_size'])
+    params['Network'] = model_info
+    write_config(params, cfg_path, sort_keys=True)
+
+    privacy_engine = PrivacyEngine()
+
+    model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
+        module=model,
+        optimizer=optimizer,
+        data_loader=train_loader,
+        epochs=int(params['Network']['num_epochs']),
+        target_epsilon=float(params['DP']['epsilon']),
+        target_delta=float(params['DP']['delta']),
+        max_grad_norm=float(params['DP']['max_grad_norm']),
+    )
+
+    trainer = TrainingCrossModalDP(
+        cfg_path=cfg_path,
+        resume=resume,
+        physical_batch_size=int(params['DP']['physical_batch_size']),
+    )
+
+    if resume:
+        trainer.load_checkpoint_DP(
+            model=model,
+            optimiser=optimizer,
+            privacy_engine=privacy_engine,
+        )
+    else:
+        trainer.setup_model(
+            model=model,
+            optimiser=optimizer,
+            privacy_engine=privacy_engine,
+        )
+
+    trainer.train_DP_epoch(
+        train_loader=train_loader,
+        valid_loader=valid_loader,
+        num_epochs=int(params['Network']['num_epochs']),
+    )
+
+
+
+
+
+
 if __name__ == '__main__':
     global_config_path = "/PATH/crossmodal/config/config.yaml"
 
+    delete_experiment(global_config_path=global_config_path, experiment_name='biovilt_dp_head_lr1e3_eps11')
+
+    main_train_biovilt_DP(global_config_path=global_config_path, valid=True, resume=False,
+                          experiment_name='biovilt_dp_head_lr1e3_eps11', dataset_name='mimic', lr=1e-3)
+
+
     # model_name = "microsoft/BiomedVLP-BioViL-T"
-    # model_name = "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
-    # model_name = "flaviagiammarino/pubmed-clip-vit-base-patch32"
-    model_name = "openai/clip-vit-base-patch32"
-
+    # # model_name = "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
+    # # model_name = "flaviagiammarino/pubmed-clip-vit-base-patch32"
+    # # model_name = "openai/clip-vit-base-patch32"
+    #
     # dataset_name = 'mimic'
-    dataset_name = 'chexpert'
-
-    main_test_setting_bootstrap(global_config_path=global_config_path, model_name=model_name,
-                                 use_trained_version=False, trained_model_path=None, dataset_name=dataset_name, setting_name="A")
-
-    main_test_setting_bootstrap(global_config_path=global_config_path, model_name=model_name,
-                                 use_trained_version=False, trained_model_path=None, dataset_name=dataset_name, setting_name="B")
-
-
-    dataset_name = 'mimic'
-    model_list = ["microsoft/BiomedVLP-BioViL-T", "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
-                  "flaviagiammarino/pubmed-clip-vit-base-patch32", "openai/clip-vit-base-patch32"]
-    for model_name in model_list:
-        main_test_setting_bootstrap(global_config_path=global_config_path, model_name=model_name,
-                                    use_trained_version=False, trained_model_path=None, dataset_name=dataset_name, setting_name="A")
-        main_test_setting_bootstrap(global_config_path=global_config_path, model_name=model_name,
-                                    use_trained_version=False, trained_model_path=None, dataset_name=dataset_name, setting_name="B")
-
-
-    dataset_name = 'chexpert'
-    model_list = ["microsoft/BiomedVLP-BioViL-T", "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
-                  "flaviagiammarino/pubmed-clip-vit-base-patch32", "openai/clip-vit-base-patch32"]
-    for model_name in model_list:
-        main_test_setting_bootstrap(global_config_path=global_config_path, model_name=model_name,
-                                    use_trained_version=False, trained_model_path=None, dataset_name=dataset_name, setting_name="A")
-        main_test_setting_bootstrap(global_config_path=global_config_path, model_name=model_name,
-                                    use_trained_version=False, trained_model_path=None, dataset_name=dataset_name, setting_name="B")
+    # # dataset_name = 'chexpert'
+    #
+    # main_test_setting_bootstrap(global_config_path=global_config_path, model_name=model_name,
+    #                              use_trained_version=False, trained_model_path=None, dataset_name=dataset_name, setting_name="A")

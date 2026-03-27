@@ -1,5 +1,28 @@
-runtime:
-  use_amp: true # useful for speed
+CrossModal:
+  mimic_master_csv: /PATH.csv
+  mimic_image_root: /PATH
+  mimic_reports_root: /PATH
+  chexpert_master_csv: /PATH.csv
+  chexpert_reports_csv: /PATH/chexpert_plus_reports.csv
+  chexpert_image_root: /PATH
+
+  batch_size: 32
+  num_workers: 10
+  max_text_tokens_clip_pubmed: 77
+  max_text_tokens_biovilt: 512
+  temperature: 0.07
+
+  base_seed: 20260222
+  n_trials_settingA: 20
+  n_trials_settingB: 10
+  n_bootstrap: 1000
+  settingB_N: 10000
+
+
+Network:
+  weight_decay: 0.01
+  amsgrad: false
+  num_epochs: 5
 
 network_output_path: network_data/
 output_data_path: output_data/
@@ -7,30 +30,17 @@ tb_logs_path: tensor_board_logs/
 stat_log_path: stat_logs
 checkpoint_name: checkpoint.tar
 trained_model_name: trained_model.pth
-hf_login: "xxxxxxxxxxx"
-
+DP_checkpoint_name: DP_checkpoint.tar
 
 # changeable items:
-target_dir: /PATH/crossmodal/
+file_path: /PATH
+target_dir: /PATH/crossmodal
 display_stats_freq: 1 # valid freq is equal to this
 
-
-
-CrossModal:
-  mimic_master_csv: /PATH/MIMIC/nothree_master_list_20percenttest.csv
-  mimic_image_root: /PATH/MIMIC
-  mimic_reports_root: /PATH/MIMIC
-  chexpert_master_csv: /PATH/CheXpert-v1.0/nothree_master_list_20percenttest.csv
-  chexpert_reports_csv: /PATH/CheXpert-v1.0/chexpert_plus_reports.csv
-  chexpert_image_root: /PATH
-
-  batch_size: 128
-  num_workers: 10
-  max_text_tokens_clip_pubmed: 77
-  max_text_tokens_biovilt: 512
-
-  base_seed: 20260222
-  n_trials_settingA: 20
-  n_trials_settingB: 10
-  n_bootstrap: 1000
-  settingB_N: 10000
+DP:
+  epsilon: 11
+  delta: 6e-6
+  max_grad_norm: 1.5
+  logical_batch_size: 128
+  physical_batch_size: 64
+  gn_num_groups: 32
