@@ -24,8 +24,8 @@ from tqdm import tqdm
 
 from config.serde import open_experiment, create_experiment, delete_experiment, write_config, read_config
 from data.data_provider import mimic_retrieval_test_data_loader_2D, mimic_retrieval_collate_fn, chexpert_retrieval_test_data_loader_2D, chexpert_retrieval_collate_fn, mimic_biovilt_dp_data_loader_2D, mimic_biovilt_dp_collate_fn, CachedProjectionDataset, cached_projection_collate_fn
-from Evaluations_crossmodal import PredictionCrossModalSettingA, PredictionCrossModalSettingA_BioViLT, PredictionCrossModalSettingA_BiomedCLIP, PredictionCrossModalSettingB, PredictionCrossModalSettingB_BiomedCLIP, PredictionCrossModalSettingB_BioViLT
-from Train_Valid_crossmodal import TrainingCrossModalDP, BioViLTProjectionHeadDPModel, BioViLTFeatureExtractor
+from Evaluations_crossmodal import PredictionCrossModalSettingA, PredictionCrossModalSettingA_BioViLT, PredictionCrossModalSettingA_BiomedCLIP, PredictionCrossModalSettingB, PredictionCrossModalSettingB_BiomedCLIP, PredictionCrossModalSettingB_BioViLT, PredictionCrossModalDP_BioViLT, PredictionCrossModalEntropy_BioViLT
+from Train_Valid_crossmodal import TrainingCrossModalDP, BioViLTProjectionHeadDPModel, BioViLTFeatureExtractor, TrainingCrossModalEntropy
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -297,17 +297,254 @@ def main_train_biovilt_DP(global_config_path="/PATH/config/config.yaml", valid=T
 
 
 
+def main_test_biovilt_dp_privacy(global_config_path="/PATH/config/config.yaml", trained_model_path="/PATH/to/dp_checkpoint.pth",
+                                  dataset_name="mimic", split_name="test", variant_name="dp_head"):
+    dataset_name = str(dataset_name).lower()
+    split_name = str(split_name).lower()
+
+    if dataset_name not in ["mimic", "chexpert"]:
+        raise ValueError("dataset_name must be 'mimic' or 'chexpert'.")
+
+    predictor = PredictionCrossModalDP_BioViLT(
+        cfg_path=global_config_path,
+        split_name=split_name,
+        dataset_name=dataset_name,
+        variant_name=variant_name,
+    )
+
+    predictor.setup_model(trained_model_path=trained_model_path)
+    emb_dict = predictor.extract_embeddings()
+
+    result_a = predictor.run_settingA(emb_dict)
+    predictor.save_predictions_csv(result_a["raw_trial_df"], setting_name="A")
+    predictor.save_bootstrap_csv(result_a["bootstrap_df"], setting_name="A")
+    predictor.save_summary_csv(result_a["summary_df"], setting_name="A")
+    predictor.print_and_save_stats(result_a["summary_df"], setting_name="A")
+
+    result_b = predictor.run_settingB(emb_dict)
+    predictor.save_predictions_csv(result_b["raw_trial_df"], setting_name="B")
+    predictor.save_bootstrap_csv(result_b["bootstrap_df"], setting_name="B")
+    predictor.save_summary_csv(result_b["summary_df"], setting_name="B")
+    predictor.print_and_save_stats(result_b["summary_df"], setting_name="B")
+
+    return {"settingA_summary_df": result_a["summary_df"],
+        "settingA_bootstrap_df": result_a["bootstrap_df"],
+        "settingB_summary_df": result_b["summary_df"],
+        "settingB_bootstrap_df": result_b["bootstrap_df"]}
+
+
+
+
+
+def main_train_biovilt_entropy(global_config_path="/PATH/config/config.yaml", valid=True, resume=False,
+                                experiment_name='biovilt_entropy_head', lr=1e-3, entropy_lambda=0.05):
+    if resume:
+        params = open_experiment(experiment_name, global_config_path)
+    else:
+        params = create_experiment(experiment_name, global_config_path)
+
+    cfg_path = params["cfg_path"]
+
+    # raw paired dataset for feature caching
+    train_dataset_raw = mimic_biovilt_dp_data_loader_2D(cfg_path=cfg_path, mode='train')
+    valid_dataset_raw = mimic_biovilt_dp_data_loader_2D(cfg_path=cfg_path, mode='test')
+
+    raw_train_loader = DataLoader(
+        dataset=train_dataset_raw,
+        batch_size=int(params["CrossModal"]["feature_cache_batch_size"]),
+        pin_memory=True,
+        drop_last=False,
+        shuffle=False,
+        num_workers=int(params["CrossModal"]["num_workers"]),
+        collate_fn=mimic_biovilt_dp_collate_fn,
+        persistent_workers=True,
+    )
+
+    raw_valid_loader = DataLoader(
+        dataset=valid_dataset_raw,
+        batch_size=int(params["CrossModal"]["feature_cache_batch_size"]),
+        pin_memory=True,
+        drop_last=False,
+        shuffle=False,
+        num_workers=8,
+        collate_fn=mimic_biovilt_dp_collate_fn,
+        persistent_workers=True,
+    )
+
+    # cache frozen features
+    cache_dir = os.path.join(params["target_dir"], 'cached_biovilt_features')
+    os.makedirs(cache_dir, exist_ok=True)
+
+    train_img_path = os.path.join(cache_dir, "train_img.pt")
+    train_txt_path = os.path.join(cache_dir, "train_txt.pt")
+    valid_img_path = os.path.join(cache_dir, "test_img.pt")
+    valid_txt_path = os.path.join(cache_dir, "test_txt.pt")
+
+    if all(os.path.exists(p) for p in [train_img_path, train_txt_path, valid_img_path, valid_txt_path]):
+        train_img = torch.load(train_img_path, map_location="cpu", weights_only=False)
+        train_txt = torch.load(train_txt_path, map_location="cpu", weights_only=False)
+        valid_img = torch.load(valid_img_path, map_location="cpu", weights_only=False)
+        valid_txt = torch.load(valid_txt_path, map_location="cpu", weights_only=False)
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        feature_extractor = BioViLTFeatureExtractor(
+            model_name="microsoft/BiomedVLP-BioViL-T",
+            max_text_tokens=int(params["CrossModal"]["max_text_tokens_biovilt"]),
+            device=device,
+        )
+
+        train_img, train_txt = precompute_cached_features(
+            feature_extractor=feature_extractor,
+            data_loader=raw_train_loader,
+            save_prefix=os.path.join(cache_dir, "train"),
+        )
+        valid_img, valid_txt = precompute_cached_features(
+            feature_extractor=feature_extractor,
+            data_loader=raw_valid_loader,
+            save_prefix=os.path.join(cache_dir, "test"),
+        )
+
+    # cached tiny-head dataset
+    train_dataset = CachedProjectionDataset(train_img, train_txt)
+    valid_dataset = CachedProjectionDataset(valid_img, valid_txt)
+
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=int(params['DP']['logical_batch_size']),
+        pin_memory=True,
+        drop_last=True,
+        shuffle=True,
+        num_workers=4,
+        collate_fn=cached_projection_collate_fn,
+        persistent_workers=True,
+    )
+
+    valid_loader = None
+    if valid:
+        valid_loader = DataLoader(
+            dataset=valid_dataset,
+            batch_size=int(params['DP']['logical_batch_size']),
+            pin_memory=True,
+            drop_last=False,
+            shuffle=False,
+            num_workers=2,
+            collate_fn=cached_projection_collate_fn,
+            persistent_workers=True,
+        )
+
+    model = BioViLTProjectionHeadDPModel(model_name="microsoft/BiomedVLP-BioViL-T")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+    model.train()
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(
+        trainable_params,
+        lr=lr,
+        weight_decay=float(params['Network']['weight_decay']),
+    )
+
+    model_info = params['Network']
+    model_info['lr'] = lr
+    model_info['batch_size'] = int(params['DP']['logical_batch_size'])
+    model_info['entropy_lambda'] = float(entropy_lambda)
+    params['Network'] = model_info
+    write_config(params, cfg_path, sort_keys=True)
+
+    trainer = TrainingCrossModalEntropy(
+        cfg_path=cfg_path,
+        resume=resume,
+        entropy_lambda=float(entropy_lambda),
+    )
+
+    if resume:
+        trainer.load_checkpoint_entropy(
+            model=model,
+            optimiser=optimizer,
+        )
+    else:
+        trainer.setup_model(
+            model=model,
+            optimiser=optimizer,
+        )
+
+    trainer.train_entropy_epoch(
+        train_loader=train_loader,
+        valid_loader=valid_loader,
+        num_epochs=int(params['Network']['num_epochs']),
+    )
+
+
+
+
+
+def main_test_biovilt_entropy_privacy(global_config_path="/PATH/config/config.yaml", trained_model_path="/PATH/to/entropy_checkpoint.pth",
+                                       dataset_name="mimic", split_name="test", variant_name="entropy_head"):
+    dataset_name = str(dataset_name).lower()
+    split_name = str(split_name).lower()
+
+    if dataset_name not in ["mimic", "chexpert"]:
+        raise ValueError("dataset_name must be 'mimic' or 'chexpert'.")
+
+    predictor = PredictionCrossModalEntropy_BioViLT(
+        cfg_path=global_config_path,
+        split_name=split_name,
+        dataset_name=dataset_name,
+        variant_name=variant_name,
+    )
+
+    predictor.setup_model(trained_model_path=trained_model_path)
+    emb_dict = predictor.extract_embeddings()
+
+    result_a = predictor.run_settingA(emb_dict)
+    predictor.save_predictions_csv(result_a["raw_trial_df"], setting_name="A")
+    predictor.save_bootstrap_csv(result_a["bootstrap_df"], setting_name="A")
+    predictor.save_summary_csv(result_a["summary_df"], setting_name="A")
+    predictor.print_and_save_stats(result_a["summary_df"], setting_name="A")
+
+    result_b = predictor.run_settingB(emb_dict)
+    predictor.save_predictions_csv(result_b["raw_trial_df"], setting_name="B")
+    predictor.save_bootstrap_csv(result_b["bootstrap_df"], setting_name="B")
+    predictor.save_summary_csv(result_b["summary_df"], setting_name="B")
+    predictor.print_and_save_stats(result_b["summary_df"], setting_name="B")
+
+    return {
+        "settingA_summary_df": result_a["summary_df"],
+        "settingA_bootstrap_df": result_a["bootstrap_df"],
+        "settingB_summary_df": result_b["summary_df"],
+        "settingB_bootstrap_df": result_b["bootstrap_df"],
+    }
+
+
 
 
 
 
 if __name__ == '__main__':
-    global_config_path = "/PATH/crossmodal/config/config.yaml"
 
-    delete_experiment(global_config_path=global_config_path, experiment_name='biovilt_dp_head_temp')
+    # main_train_biovilt_DP(global_config_path=global_config_path, valid=True, resume=False,
+    #                       experiment_name='biovilt_dp_head_lr1e3_eps9_epochs5', lr=1e-3)
 
-    main_train_biovilt_DP(global_config_path=global_config_path, valid=True, resume=False,
-                          experiment_name='biovilt_dp_head_temp', lr=5e-4)
+
+    # main_train_biovilt_entropy(global_config_path=global_config_path, valid=True, resume=False,
+    #                       experiment_name='biovilt_entropy_lr1e3', lr=1e-3)
+
+
+    main_test_biovilt_entropy_privacy(global_config_path=global_config_path, trained_model_path=trained_model_path,
+                                 dataset_name="chexpert", split_name="test", variant_name="entropy_head")
+    # main_test_biovilt_entropy_privacy(global_config_path=global_config_path, trained_model_path=trained_model_path,
+    #                              dataset_name="mimic", split_name="test", variant_name="entropy_head")
+
+    # main_test_biovilt_dp_privacy(global_config_path=global_config_path, trained_model_path=trained_model_path,
+    #                              dataset_name="chexpert", split_name="test", variant_name="dp_head")
+    # main_test_biovilt_dp_privacy(global_config_path=global_config_path, trained_model_path=trained_model_path,
+    #                              dataset_name="mimic", split_name="test", variant_name="dp_head")
+
+
+
+
 
 
     # model_name = "microsoft/BiomedVLP-BioViL-T"

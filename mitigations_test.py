@@ -1039,43 +1039,43 @@ def extract_and_save_dp_projected_image_embeddings(
 
 
 if __name__ == '__main__':
-    cfg_path = "/PATH/config/config.yaml"
+    cfg_path = "/PATH/config.yaml"
     out_base_path = "/PATH/embeddings"
-    trained_model_path = "/PATH/epoch1_trained_model.pth"
+    trained_model_path = "/PATH.pth"
     params = read_config(cfg_path)
 
 
     ''' off the shelf'''
-    extract_and_save_image_embeddings(
-        cfg_path=cfg_path,
-        split_name="train",
-        out_path=os.path.join(out_base_path, "biovilt_offshelf_train.pt"),
-        variant_name="off_shelf",
-        trained_model_path=None,
-        batch_size=128,
-        num_workers=8,
-        use_amp=True,
-    )
-    extract_and_save_image_embeddings(
-        cfg_path=cfg_path,
-        split_name="test",
-        out_path=os.path.join(out_base_path, "biovilt_offshelf_test.pt"),
-        variant_name="off_shelf",
-        trained_model_path=None,
-        batch_size=128,
-        num_workers=8,
-        use_amp=True,
-    )
+    # extract_and_save_image_embeddings(
+    #     cfg_path=cfg_path,
+    #     split_name="train",
+    #     out_path=os.path.join(out_base_path, "biovilt_offshelf_train.pt"),
+    #     variant_name="off_shelf",
+    #     trained_model_path=None,
+    #     batch_size=128,
+    #     num_workers=8,
+    #     use_amp=True,
+    # )
+    # extract_and_save_image_embeddings(
+    #     cfg_path=cfg_path,
+    #     split_name="test",
+    #     out_path=os.path.join(out_base_path, "biovilt_offshelf_test.pt"),
+    #     variant_name="off_shelf",
+    #     trained_model_path=None,
+    #     batch_size=128,
+    #     num_workers=8,
+    #     use_amp=True,
+    # )
 
-    # train linear probe
-    train_linear_probe_from_saved_embeddings(
-        train_emb_path=os.path.join(out_base_path, "biovilt_offshelf_train.pt"),
-        val_emb_path=os.path.join(out_base_path, "biovilt_offshelf_test.pt"),
-        classifier_save_path=os.path.join(out_base_path, "linear_probe_biovilt_offshelf.pth"),
-        batch_size=512,
-        lr=1e-3,
-        num_epochs=100,
-    )
+    # # train linear probe
+    # train_linear_probe_from_saved_embeddings(
+    #     train_emb_path=os.path.join(out_base_path, "biovilt_offshelf_train.pt"),
+    #     val_emb_path=os.path.join(out_base_path, "biovilt_offshelf_test.pt"),
+    #     classifier_save_path=os.path.join(out_base_path, "linear_probe_biovilt_offshelf.pth"),
+    #     batch_size=1024,
+    #     lr=5e-3,
+    #     num_epochs=500,
+    # )
 
     # test linear probe
     test_linear_probe_from_saved_embeddings(
@@ -1084,6 +1084,7 @@ if __name__ == '__main__':
         batch_size=512,
         save_predictions_csv_path=os.path.join(out_base_path, "biovilt_offshelf_predictions.csv"),
         save_bootstrap_csv_path=os.path.join(out_base_path, "biovilt_offshelf_bootstrap.csv"),
+        n_bootstrap=1000,
         save_summary_txt_path=os.path.join(out_base_path, "biovilt_offshelf_bootstraptext.text"),
     )
 
@@ -1121,20 +1122,21 @@ if __name__ == '__main__':
     # train linear probe
     train_linear_probe_from_saved_embeddings(
         train_emb_path=os.path.join(out_base_path, "biovilt_dp_train.pt"),
-        val_emb_path=os.path.join(out_base_path, "biovilt_dp_est.pt"),
+        val_emb_path=os.path.join(out_base_path, "biovilt_dp_test.pt"),
         classifier_save_path=os.path.join(out_base_path, "linear_probe_biovilt_DP.pth"),
         batch_size=512,
-        lr=1e-3,
-        num_epochs=100,
+        lr=5e-3,
+        num_epochs=500,
     )
 
     # test linear probe
     test_linear_probe_from_saved_embeddings(
-        test_emb_path=os.path.join(out_base_path, "biovilt_dp_est.pt"),
+        test_emb_path=os.path.join(out_base_path, "biovilt_dp_test.pt"),
         classifier_ckpt_path=os.path.join(out_base_path, "linear_probe_biovilt_DP.pth"),
-        batch_size=512,
+        batch_size=1024,
         save_predictions_csv_path=os.path.join(out_base_path, "biovilt_DP_predictions.csv"),
         save_bootstrap_csv_path=os.path.join(out_base_path, "biovilt_DP_bootstrap.csv"),
+        n_bootstrap=1000,
         save_summary_txt_path=os.path.join(out_base_path, "biovilt_DP_bootstraptext.text"),
     )
 
