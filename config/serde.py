@@ -2,7 +2,7 @@
 Created on November 10, 2019
 functions for writing/reading data to/from disk
 
-@modified_by: Soroosh Tayebi Arasteh <soroosh.arasteh@fau.de>
+@modified_by: Soroosh Tayebi Arasteh
 """
 import yaml
 import numpy as np
