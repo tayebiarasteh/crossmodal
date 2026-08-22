@@ -1,0 +1,355 @@
+ocean_root: /PATH
+home_root:  /PATH
+user_home:  /PATH
+datasets_root: /PATH/datasets
+
+xray_root:     "${datasets_root}/XRay"
+outputs_root:  "${ocean_root}/PATH/crossmodal"
+repo_root:     "${home_root}/PATH/crossmodal"
+manifests_dir: "${outputs_root}/manifests"
+
+CrossModal:
+  global_config_path: "${repo_root}/config/config.yaml"
+  seed: 42
+
+  hf_token:          "YOUR_HF_TOKEN_HERE"
+
+  paths:
+    manifests_dir:   "${manifests_dir}"
+    embeddings_dir:  "${outputs_root}/embeddings"
+    reports_dir:     "${outputs_root}/reports"
+    linkage_dir:     "${outputs_root}/linkage"
+    analysis_dir:    "${outputs_root}/analysis"
+    heads_dir:       "${outputs_root}/heads"
+    results_dir:     "${outputs_root}/results"
+    status_dir:      "${outputs_root}/status"
+
+  labels:
+    findings: [atelectasis, cardiomegaly, consolidation, edema, enlarged_cardiomediastinum,
+               fracture, lung_lesion, lung_opacity, no_finding, pleural_effusion,
+               pleural_other, pneumonia, pneumothorax, support_devices]
+    positive_code:  1
+    negative_codes: [0, 2]
+    exclude_codes:  [3]
+
+  cohorts:
+    mimic:
+      enabled: true
+      role: "development"
+      master_csv:   "${xray_root}/MIMIC/MASTERLIST.csv"
+      image_root:   "${xray_root}/MIMIC"
+      report_mode:  "file"
+      report_col:   "report_rel_path"
+      report_root:  "${xray_root}/MIMIC"
+      report_sections_from: "parser"
+      image_key_col: "jpg_rel_path"
+      patient_col:  "subject_id"
+      study_col:    "study_id"
+      split_col:    "split"
+      view_col:     "view"
+      keep_views:   [PA, AP]
+      age_col:      "age"
+      sex_col:      "gender"
+      date_col:     "StudyDate"
+      site_col:     null
+      source_resolution: 224
+
+    chexpert:
+      enabled: true
+      role: "external"
+      master_csv:   "${xray_root}/CheXpert-v1.0/masterlist.csv"
+      image_root:   "${xray_root}"
+      report_mode:  "join_csv"
+      report_csv:   "${xray_root}/CheXpert-v1.0/chexpert_plus.csv"
+      report_join_col: "jpg_rel_path"
+      report_full_cols: [report]
+      report_section_cols: [section_findings, section_impression]
+      report_impression_cols: [section_impression]
+      report_sections_from: "columns"
+      image_key_col: "jpg_rel_path"
+      patient_col:  "subject_id"
+      study_col:    null
+      study_from_path: "(patient[0-9]+/study[0-9]+)"
+      split_col:    "split"
+      view_col:     "view"
+      keep_views:   [Frontal]
+      age_col:      "age"
+      sex_col:      "gender"
+      date_col:     null
+      site_col:     null
+      source_resolution: 224
+
+    rexgradient:
+      enabled: true
+      role: "external_multisite"
+      master_csv:   "${xray_root}/ReXGradient-160K/rexgradient_masterlist.csv"
+      image_root:   "${xray_root}/ReXGradient-160K"
+      report_mode:  "inline"
+      report_full_cols: [Indication, Comparison, Findings, Impression]
+      report_section_cols: [Findings, Impression]
+      report_impression_cols: [Impression]
+      report_sections_from: "columns"
+      image_key_col: "ImagePath"
+      patient_col:  "PatientID"
+      study_col:    "StudyKey"
+      split_col:    "split"
+      view_col:     "ImageViewPosition"
+      keep_views:   [AP, PA]
+      keep_modalities: [CR, DX, DR]
+      modality_col: "ImageModality"
+      age_col:      "PatientAge"
+      sex_col:      "PatientSex"
+      date_col:     "StudyDate"
+      site_col:     "InstitutionName"
+      labels_source: "llm_labeler"
+      source_resolution: 224
+
+  split:
+    rebuild_from_patients: true
+    test_frac:  0.20
+    valid_frac: 0.10
+    seed: 20260222
+    min_report_chars: 20
+
+  models:
+    clip_b32:
+      hf_id: "openai/clip-vit-base-patch32"
+      type: "clip_pooled"
+      specialization: "general"
+      axis_role: "least_specialized"
+      image_size: 224
+      max_text_tokens: 77
+      embed_dim: 512
+    clip_l14:
+      hf_id: "openai/clip-vit-large-patch14"
+      type: "clip_pooled"
+      specialization: "general"
+      axis_role: "scale"
+      image_size: 224
+      max_text_tokens: 77
+      embed_dim: 768
+    siglip2_large:
+      hf_id: "google/siglip2-large-patch16-512"
+      type: "clip_pooled"
+      specialization: "general"
+      axis_role: "objective"
+      image_size: 512
+      max_text_tokens: 64
+      embed_dim: 1024
+    pubmedclip:
+      hf_id: "flaviagiammarino/pubmed-clip-vit-base-patch32"
+      type: "clip_pooled"
+      specialization: "biomedical"
+      axis_role: "specialization"
+      image_size: 224
+      max_text_tokens: 77
+      embed_dim: 512
+    biomedclip:
+      hf_id: "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
+      type: "open_clip"
+      specialization: "biomedical"
+      axis_role: "specialization"
+      image_size: 224
+      max_text_tokens: 256
+      embed_dim: 512
+    medsiglip:
+      hf_id: "google/medsiglip-448"
+      type: "clip_pooled"
+      specialization: "medical"
+      axis_role: "specialization"
+      image_size: 448
+      max_text_tokens: 64
+      embed_dim: 1152
+      gated: true
+    biovilt:
+      hf_id: "microsoft/BiomedVLP-BioViL-T"
+      type: "biovilt"
+      specialization: "radiology"
+      axis_role: "most_specialized"
+      image_size: 448
+      max_text_tokens: 512
+      embed_dim: 128
+    monet:
+      hf_id: "chanwkim/monet"
+      type: "clip_pooled"
+      specialization: "medical_off_domain"
+      axis_role: "off_domain_control"
+      image_size: 224
+      max_text_tokens: 77
+      embed_dim: 768
+
+  baselines:
+    metadata_only:
+      attributes: [sex, age_band, view]
+    txrv_labels:
+      hf_id: "TXRV_BUILTIN"
+      type: "txrv"
+      checkpoint: "densenet121-res224-all"
+      image_size: 224
+      match: "label_vector_cosine"
+
+  extraction:
+    batch_size: 64
+    num_workers: 10
+    shard_rows: 20000
+    dtype: "float32"
+    splits: [test]
+
+  report_transforms:
+    order: [T0, T1, T2, T3, T4, T5, T6, T7]
+    T0: {name: "full",            kind: "identity"}
+    T1: {name: "findings_impression", kind: "sections", keep: [findings, impression]}
+    T2: {name: "impression_only",     kind: "sections", keep: [impression]}
+    T3: {name: "no_measurements",     kind: "regex_strip", groups: [measurement, date]}
+    T4: {name: "no_devices",          kind: "regex_strip", groups: [device]}
+    T5: {name: "no_measurements_no_devices", kind: "regex_strip", groups: [measurement, date, device]}
+    T6: {name: "llm_canonical",       kind: "llm_rewrite"}
+    T7: {name: "label_template",      kind: "label_template"}
+
+  serving:
+    backend:          api
+    api_base_url:     "YOUR_SERVER_BASE_URL_HERE"
+    api_base_url_env: CROSSMODALITY_API_BASE_URL
+    api_key:          "YOUR_API_KEY_HERE"
+    api_key_env:      CROSSMODALITY_API_KEY
+    verify_ssl:       false
+    timeout_s:        120
+    timeout_per_token_s: 0.12
+    timeout_request_max_s: 1200
+    max_retries:      5
+    retry_backoff_s:  2.0
+    retry_backoff_max_s: 30
+    connect_retry_max_s: 600
+    rate_limit_retries: 8
+    max_consecutive_failures: 30
+    concurrency:      32
+    request_batch_size: 1
+    progress_bars:    true
+
+  llm:
+    hf_id: "Qwen/Qwen3.5-122B-A10B"
+    served_name: "Qwen/Qwen3.5-122B-A10B-GPTQ-Int4"
+    recipe_group: "qwen3"
+    thinking: "off"
+    load_4bit: true
+    max_new_tokens: 512
+    temperature: 0.0
+    top_p: 1.0
+    seed: 0
+    shard_rows: 2000
+    max_unanswered_frac: 0.10
+
+  instrument:
+    decision_statistics: [margin, top1_score, ratio]
+    default_statistic: "margin"
+    budgets_k: [10, 100, 1000]
+    budget_curve_fracs: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0]
+    fpr_levels: [0.01, 0.001]
+    score_chunk_rows: 2048
+    score_chunk_max_gb: 4.0
+    overlap_strata: 10
+
+  conditioning:
+    sets:
+      none:     []
+      sex:      [sex]
+      age:      [age_band]
+      view:     [view]
+      year:     [study_year]
+      site:     [site]
+      demographics: [sex, age_band, view]
+      all:      [sex, age_band, view, study_year]
+    age_band_years: 5
+    min_pool_size: 2
+    hard_neg_pool: 10000
+    analysis_axes:
+      e4_exposure:   [demographics, all]
+      e5_transform:  [demographics]
+      e6_defense:    [demographics]
+      e3_report_map: [demographics]
+      e2_agreement:  [demographics]
+      e7_ranking:    [demographics]
+    ladder_models: [biovilt, medsiglip, clip_b32]
+
+  heads:
+    backbone: "biovilt"
+    train_cohort: "mimic"
+    temperature: 0.07
+    num_workers: 0
+    hidden_dim: 512
+    out_dim: 128
+    variants:
+      plain:
+        private: false
+        lr: 0.005
+        weight_decay: 0.01
+        batch_size: 512
+        num_epochs: 50
+        select_on: "valid_selective_precision"
+      random_disruption:
+        kind: "random_orthogonal"
+        private: false
+
+      dp_inbatch:
+        private: true
+        lr: 0.005
+        weight_decay: 0.01
+        logical_batch_size: 128
+        physical_batch_size: 64
+        num_epochs: 150
+        max_grad_norm: 1.5
+        target_epsilon: 2.0
+        delta: 6.0e-6
+        gn_num_groups: 32
+        select_on: "valid_selective_precision"
+        negatives: "in_batch"
+        epsilon_is_valid: false
+        negative_bank_size: 0
+        report_patient_level: true
+
+      dp:
+        private: true
+        lr: 0.005
+        weight_decay: 0.01
+        logical_batch_size: 128
+        physical_batch_size: 64
+        num_epochs: 150
+        max_grad_norm: 1.5
+        target_epsilon: 2.0
+        delta: 6.0e-6
+        gn_num_groups: 32
+        select_on: "valid_selective_precision"
+        negatives: "fixed_bank"
+        negative_bank_size: 4096
+        report_patient_level: true
+
+  utility:
+    linear_probe:
+      lr: 0.001
+      weight_decay: 0.0001
+      batch_size: 512
+      num_epochs: 100
+      early_stop_patience: 10
+      select_on: "valid_macro_auroc"
+    zero_shot:
+      prompt_positive: "findings consistent with {finding}"
+      prompt_negative: "no evidence of {finding}"
+    t2i_sample: 5000
+    probe_cohorts: [mimic]
+
+  report_map:
+    rare_prevalence: 0.02
+    min_recovered_for_agreement: 10
+    min_fold_for_agreement: 2.0
+
+  content_check:
+    sample_per_cohort: 2000
+    seed: 11
+
+  stats:
+    n_boot: 1000
+    n_perm: 1000
+    boot_seed: 0
+    cluster_unit: "patient_id"
+    alpha: 0.05
+    fdr_method: "fdr_bh"
