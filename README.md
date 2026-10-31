@@ -1,57 +1,72 @@
 # Selective Linkage Precision for Released Medical Vision-Language Models
 
-A released medical vision-language model embeds chest radiographs and radiology reports in one space. So anyone who downloads it can score one radiograph against a corpus of reports and rank them. This repository measures how often the top-ranked report is the right one at the operating point that an adversary chooses, instead of averaged over a whole dataset. It also measures four release variants, meaning one differentially private defense, its comparator, an adversary's bypass, and a control that destroys the alignment without any training.
+Code for *Selective Linkage Precision for Released Medical Vision-Language Models*.
 
-## Repository layout
+Selective linkage precision measures how often a released vision-language model links a released chest radiograph to its withheld report, among the queries an attacker selects by the margin between the best and the second-best candidate score, inside the candidate set the published attributes leave.
 
-| Directory | Contents |
+## What is here
+
+`config/config.yaml` holds every path, cohort, model and analysis setting, and
+`config/serde.py` reads it. Each module below takes the path of that file.
+
+| Part of the study | Module |
 | --- | --- |
-| `config/` | The single configuration file and its loader. One file sets every path, dataset, model, report form, and threshold |
-| `data_loader/` | Dataset pool construction, report section parsing, the eight report forms, and the client for the locally served language model |
-| `encoders/` | Image and text embedding extraction and caching, one cache per model, dataset, and report form |
-| `linkage/` | Ranking against the candidate corpus, the measurements computed from it, the conditioned candidate pools, and the two adversaries that use no vision-language model |
-| `mitigation/` | The four release variants and the clinical performance measured under each |
-| `analysis/` | One module per experiment, each emitting canonical result rows |
-| `Inference/` | Bootstrap intervals over patient clusters, tests, multiple-comparison correction, and the row schema that every reported number is emitted under |
-| `generation/` | Wrappers for the served open-weight language model |
+| Paired image-report pools, splits and attribute harmonization | `data_loader/build_paired_pool.py`, `data_loader/cxr_harmonization.py` |
+| Report transformations and the language-model rewrite | `data_loader/report_transforms.py`, `data_loader/llm_local.py` |
+| Finding labels read from the report text | `data_loader/report_labeler.py` |
+| Image and text embeddings for every release | `encoders/extract_embeddings.py`, `encoders/image_text_encoders.py` |
+| Candidate ranking, conditioning on published attributes, and the margin | `linkage/retrieval.py`, `linkage/conditioning.py`, `linkage/instrument.py` |
+| Adversaries that hold no vision-language model | `linkage/baselines.py` |
+| Absent correct reports and the study-level attack | `linkage/openset.py` |
+| Candidate collections larger than one test split | `linkage/union_corpus.py` |
+| Projection heads, the private and non-private training, and utility | `mitigation/` |
+| Whole-pool linkage | `analysis/e1_linkage.py` |
+| Conditioning on each attribute and on both conjunctions | `analysis/e2_conditioning.py` |
+| Report characteristics against recoverability | `analysis/e3_report_map.py`, `analysis/e11_multivariable.py` |
+| Exposure contrasts between recovered and other reports | `analysis/e4_exposure.py` |
+| Linkage and content under each report transformation | `analysis/e5_transform_curve.py` |
+| Release variants, the matched control, and their paired contrasts | `analysis/e6_model_defense.py` |
+| Rankings by Recall@1 against rankings by selective precision | `analysis/e7_metric_disagreement.py` |
+| Adversaries without a shared image-text space | `analysis/e8_no_model_adversary.py` |
+| Absent reports, perturbed attributes, and the study-level attack | `analysis/e9_openset.py` |
+| Model, attributes, and both on one matched query set | `analysis/e10_matched_adversary.py` |
+| Larger candidate collections | `analysis/e12_pool_scale.py` |
+| Bootstrap, paired contrasts, and the Benjamini-Hochberg correction | `Inference/` |
 
-## Before running
+Each module's entry point takes the path of the configuration as its first argument:
+`build_paired_pool`, `build_report_transforms`, `extract_image_embeddings` and
+`extract_text_embeddings`, `build_linkage_records`, `build_conditioned_records`,
+`build_baseline_records`, `build_openset_records` and `build_openset_study_level`,
+`build_union_corpus_records`, `train_heads`, `run_zero_shot` and `run_linear_probe`, and
+`run_e1` to `run_e12`. There is no fixed order to run them in: each reads the outputs of
+whatever it needs and raises `MissingInput` when those are not on disk. Every one of them
+resumes from where it stopped, skips a unit that is already finished and well formed, and
+rebuilds whatever was produced under different build parameters.
 
-```bash
-git clone https://github.com/tayebiarasteh/crossmodal.git
-```
+## Data
 
-Every absolute path in `config/config.yaml` is written as `/PATH` and has to be replaced with the location on your own machine. The four machine roots at the top of that file and `GLOBAL_CONFIG_PATH` at the top of `main_crossmodal.py` are the only per-machine lines. Everything else is built from them.
+The three sources are obtained from their own custodians under their own terms:
+MIMIC-CXR and MIMIC-IV from PhysioNet, CheXpert Plus from Stanford AIMI, and
+ReXGradient-160K from its data access and use agreement. This repository redistributes
+no image, no report and no label, and no model weights. Point `datasets_root` and the
+per-cohort keys of `config/config.yaml` at your own copies.
 
-The three datasets are not redistributed here. MIMIC-CXR and CheXpert Plus are obtained from PhysioNet under their own data use agreements, and ReXGradient-160K from its own release. The PhysioNet agreement forbids sending report text to a third-party service. So the language model behind the report rewriting and the label extraction is served locally, and no provider model is reachable from the code.
+## Credentials
 
-Two secrets stay as placeholders in the configuration and are read from the environment instead. `CROSSMODALITY_API_BASE_URL` and `CROSSMODALITY_API_KEY` point at the OpenAI-compatible server that serves the open-weight language model. The `hf_token` key is an access token for the gated checkpoint in the model panel. Leaving it as the placeholder loads every other checkpoint anonymously.
+`hf_token` in `config/config.yaml` is a placeholder. Put your own Hugging Face token
+there, or leave the placeholder and export `HF_TOKEN`, and the ungated checkpoints load
+anonymously. 
 
-## Running the pipeline
+## Packages
 
-Each pipeline step is a `main_*` function in `main_crossmodal.py`. A step takes the path to `config/config.yaml` and returns when it is complete.
-
-```bash
-python3 -c "import main_crossmodal as m; m.main_audit_wiring()"
-python3 -c "import main_crossmodal as m; m.main_build_paired_pool(cohort='mimic')"
-```
-
-The dependency order is one paired pool per dataset, then the report forms, then the cached image and text embeddings for each model, then the ranking records, and finally the analyses and the result tables. The mitigation branch trains the projection heads, re-embeds the cached features through them, and measures clinical performance before its own analysis runs. `main_audit_wiring` checks the wiring before any of that costs time. It reports a configuration key that nothing reads, a declared name that nothing implements, a missing module, and an embedding width that disagrees with the checkpoint's own config.
-
-Every step is resumable. It writes per unit of work as it goes and skips a unit that is already finished and well-formed. So re-running a killed step continues it instead of starting over. Each cache and checkpoint also stores the parameters that it was built under, and a resume compares them before it applies a byte. A changed model, resolution, or dataset manifest therefore forces a named rebuild instead of reusing an out-of-date artifact.
-
-The analysis layer is CPU-bound and re-runs in minutes once the embedding caches exist. Building those caches and training the projection heads are the two parts that need a GPU.
-
-Every number we report is emitted as a row carrying its metric, its bootstrap interval, its resampling unit, and the keys that it was computed under. Any figure in the paper can therefore be traced back to the module that produced it.
+Python with numpy, pandas, scipy, scikit-learn, statsmodels, torch, torchvision, transformers, open_clip, torchxrayvision, opacus, pyyaml and tqdm.
 
 ## Citation
 
-```bibtex
-@article{TayebiArasteh2026SelectiveLinkage,
-  title   = {Selective Linkage Precision for Released Medical Vision-Language Models},
-  author  = {Tayebi Arasteh, Soroosh and Lotfinia, Mahshad and Nebelung, Sven and Truhn, Daniel},
-  journal = {arXiv preprint arXiv:2606.02276},
-  year    = {2026}
-}
-```
+Tayebi Arasteh S, Lotfinia M, Nebelung S, Truhn D. Selective Linkage Precision for
+Released Medical Vision-Language Models. *Proceedings of Machine Learning Research*,
+Machine Learning for Health (ML4H), 2026.
 
+## License
+
+MIT, see `LICENSE`.

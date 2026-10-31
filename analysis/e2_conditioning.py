@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 from typing import Dict, List
 
 import pandas as pd
@@ -31,8 +30,37 @@ def run_e2(cfg_path: str, force: bool = False) -> pd.DataFrame:
                   for c in cohorts
                   for i, a in enumerate(models) for b in models[i + 1:]]
 
+    noise_models = [m for m in cfg["conditioning"].get("noise_models", []) if m in models]
+    for rate in [float(x) for x in cfg["conditioning"].get("noise_rates", [])]:
+        units += [unit_key(model=m, cohort=c, cond=k, noise=f"{rate:.2f}")
+                  for m in noise_models for c in cohorts
+                  for k in conditioning_axes(cfg, "e2_noisy")]
+
     def compute(unit: str) -> List[Dict]:
         p = dict(x.split("-", 1) for x in unit.split("__"))
+        if "noise" in p:
+            rate = float(p["noise"])
+            rec = load_conditioned(cfg, p["model"], p["cohort"], p["cond"], noise_rate=rate)
+            rows = run_instrument(rec, cfg, extra_ident={"conditioning": p["cond"],
+                                                         "noise_rate": rate})
+            ident = {"model": rec["model"].iloc[0], "cohort": p["cohort"], "transform": "T0",
+                     "variant": "off_shelf", "split": "test", "conditioning": p["cond"],
+                     "noise_rate": rate}
+            rows.append(R.raw_stat(float(rec["true_in_pool"].astype(float).mean()),
+                                   name="noisy_true_in_pool_share", n=len(rec), **ident))
+            counts = load_conditioned_counts(cfg, p["model"], p["cohort"], p["cond"],
+                                             noise_rate=rate)
+            if counts:
+                rows.append(R.raw_stat(int(counts["n_dropped"]),
+                                       name="queries_dropped_below_min_pool",
+                                       n=int(counts["n_query_total"]), **ident))
+            for r in rows:
+                r["experiment"] = "E2"
+                r["analysis"] = "noisy_conditioned_linkage"
+                r["fdr_family"] = (f"E2_noisy_{p['cohort']}_{p['cond']}_{rate:.2f}_"
+                                   f"{r.get('metric') or r.get('measure')}")
+            return rows
+
         if "model_a" in p:
             ra = load_conditioned(cfg, p["model_a"], p["cohort"], p["cond"])
             rb = load_conditioned(cfg, p["model_b"], p["cohort"], p["cond"])

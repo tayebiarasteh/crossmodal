@@ -5,7 +5,6 @@ Created on July 14, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -61,6 +60,17 @@ def _pack(prefix: str, point, std, lo, hi, n, is_percent: bool) -> Dict:
     }
 
 
+def _pack_bootstrap(prefix: str, res: Dict, is_percent: bool = True) -> Dict:
+    packed = _pack(prefix, res["mean"], res["std"], res["ci_lower"],
+                   res["ci_upper"], res["n"], is_percent)
+    packed[f"{prefix}_point_raw"] = res["point"]
+    packed["central_estimator"] = "bootstrap_mean"
+    packed["n_boot_finite"] = res["n_boot_finite"]
+    for field in ("point", "mean"):
+        packed[f"{field}_in_ci"] = bool(res["ci_lower"] <= res[field] <= res["ci_upper"])
+    return packed
+
+
 def _pack_stat(prefix: str, estimate, n) -> Dict:
     def _r(v):
         return round(float(v), 6) if v is not None and np.isfinite(v) else float("nan")
@@ -95,8 +105,7 @@ def report_metric(
 ) -> Dict:
     res = bootstrap_proportion(np.asarray(values, dtype=float),
                                cluster_ids=cluster_ids, n_boot=n_boot)
-    return _pack(prefix, res["point"], res["std"], res["ci_lower"],
-                 res["ci_upper"], res["n"], is_percent)
+    return _pack_bootstrap(prefix, res, is_percent)
 
 
 def report_metric_statistic(
@@ -109,8 +118,7 @@ def report_metric_statistic(
 ) -> Dict:
     res = paired_bootstrap_statistic([np.asarray(values, dtype=float)], stat_fn,
                                      cluster_ids=cluster_ids, n_boot=n_boot)
-    return _pack(prefix, res["point"], res["std"], res["ci_lower"],
-                 res["ci_upper"], res["n"], is_percent)
+    return _pack_bootstrap(prefix, res, is_percent)
 
 
 def report_paired_diff(
@@ -123,8 +131,7 @@ def report_paired_diff(
 ) -> Dict:
     res = paired_bootstrap_diff(np.asarray(a, float), np.asarray(b, float),
                                 cluster_ids=cluster_ids, n_boot=n_boot)
-    out = _pack(prefix, res["point"], res["std"], res["ci_lower"],
-                res["ci_upper"], res["n"], is_percent)
+    out = _pack_bootstrap(prefix, res, is_percent)
     out["p_raw"] = keep_p(res["p_value"])
     out["p_fdr"] = float("nan")
     return out
@@ -142,8 +149,7 @@ def report_permutation_2(
     b = np.asarray(b, float)
     boot = bootstrap_two_sample_diff(a, b, n_boot=n_boot)
     p    = permutation_test_2groups(a, b, n_perm=n_perm)
-    out  = _pack(prefix, boot["point"], boot["std"], boot["ci_lower"],
-                 boot["ci_upper"], boot["n_a"] + boot["n_b"], is_percent)
+    out  = _pack_bootstrap(prefix, {**boot, "n": boot["n_a"] + boot["n_b"]}, is_percent)
     f = fmt_pct if is_percent else fmt_one
     out[f"{prefix}_group_a_mean"] = f(np.nanmean(a)) if len(a) else float("nan")
     out[f"{prefix}_group_b_mean"] = f(np.nanmean(b)) if len(b) else float("nan")
@@ -162,8 +168,7 @@ def report_auroc(
     from Inference.stats_utils import bootstrap_auroc
     res = bootstrap_auroc(np.asarray(y_true, float), np.asarray(y_score, float),
                           cluster_ids=cluster_ids, n_boot=n_boot)
-    return _pack(prefix, res["point"], res["std"], res["ci_lower"],
-                 res["ci_upper"], res["n"], is_percent=True)
+    return _pack_bootstrap(prefix, res, is_percent=True)
 
 
 def report_average_precision(
@@ -174,8 +179,7 @@ def report_average_precision(
     from Inference.stats_utils import bootstrap_average_precision
     res = bootstrap_average_precision(np.asarray(y_true, float), np.asarray(y_score, float),
                                       cluster_ids=cluster_ids, n_boot=n_boot)
-    return _pack(prefix, res["point"], res["std"], res["ci_lower"],
-                 res["ci_upper"], res["n"], is_percent=True)
+    return _pack_bootstrap(prefix, res, is_percent=True)
 
 
 def report_paired_auroc_diff(
@@ -197,8 +201,7 @@ def report_paired_auroc_diff(
         return out
 
     res = bootstrap_auroc_diff(y_true, score_a, score_b, cluster_ids=cids, n_boot=n_boot)
-    out = _pack(prefix, res["point"], res["std"], res["ci_lower"],
-                res["ci_upper"], res["n"], is_percent=True)
+    out = _pack_bootstrap(prefix, res, is_percent=True)
     out["p_raw"] = keep_p(res["p_value"])
     out["p_fdr"] = float("nan")
     return out
@@ -290,6 +293,52 @@ def _cluster_robust_slope(x: np.ndarray, y: np.ndarray, groups: np.ndarray):
     return slope, float(2.0 * _t.sf(abs(stat), df=n_groups - 1)), n_groups
 
 
+def report_cluster_robust_multivariable(
+    X: np.ndarray, y: np.ndarray, groups: np.ndarray,
+) -> Dict:
+    from scipy.stats import t as _t
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float)
+    g = np.asarray(groups)
+    ok = np.isfinite(y) & np.isfinite(X).all(axis=1)
+    X, y, g = X[ok], y[ok], g[ok]
+    n, k = X.shape
+    out = {"beta": np.full(k, np.nan), "p": np.full(k, np.nan), "vif": np.full(k, np.nan),
+           "n": int(n), "n_groups": 0, "r_squared": float("nan")}
+    if n == 0:
+        return out
+    _, inv = np.unique(g, return_inverse=True)
+    n_groups = int(inv.max()) + 1
+    out["n_groups"] = n_groups
+    D = np.hstack([X, np.ones((n, 1))])
+    if n <= k + 1 or n_groups < 3 or np.linalg.matrix_rank(D) < k + 1:
+        return out
+    beta, *_ = np.linalg.lstsq(D, y, rcond=None)
+    resid = y - D @ beta
+    xtx_inv = np.linalg.pinv(D.T @ D)
+    meat = np.zeros((k + 1, k + 1))
+    for j in range(n_groups):
+        u = D[inv == j].T @ resid[inv == j]
+        meat += np.outer(u, u)
+    corr = (n_groups / (n_groups - 1.0)) * ((n - 1.0) / (n - (k + 1.0)))
+    se = np.sqrt(np.clip(np.diag(corr * xtx_inv @ meat @ xtx_inv), 0.0, None))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        stat = np.where(se > 0, beta / se, np.nan)
+    out["beta"] = beta[:k]
+    out["p"] = np.array([float(2.0 * _t.sf(abs(s), df=n_groups - 1))
+                         if np.isfinite(s) else float("nan") for s in stat[:k]])
+    ss_tot = float(((y - y.mean()) ** 2).sum())
+    out["r_squared"] = (1.0 - float((resid ** 2).sum()) / ss_tot) if ss_tot > 0 else float("nan")
+    for j in range(k):
+        others = np.hstack([np.delete(X, j, axis=1), np.ones((n, 1))])
+        cj, *_ = np.linalg.lstsq(others, X[:, j], rcond=None)
+        rj = X[:, j] - others @ cj
+        tot = float(((X[:, j] - X[:, j].mean()) ** 2).sum())
+        r2 = (1.0 - float((rj ** 2).sum()) / tot) if tot > 0 else float("nan")
+        out["vif"][j] = 1.0 / (1.0 - r2) if np.isfinite(r2) and r2 < 1.0 else float("inf")
+    return out
+
+
 def report_mixedlm_slope(
     x: np.ndarray, y: np.ndarray, groups: np.ndarray,
     prefix: str = "mixedlm_slope",
@@ -315,14 +364,9 @@ def report_mixedlm_slope(
         fit = smf.mixedlm("y ~ x", df, groups=df["g"]).fit(reml=True)
         slope = float(fit.params["x"])
         p = float(fit.pvalues["x"])
-    except Exception as e:
+    except Exception:
         slope, p, n_groups = _cluster_robust_slope(x, y, groups)
         method = "ols_cluster_robust"
-        print(f"[report_mixedlm_slope] MixedLM did not fit ({type(e).__name__}: {e}); "
-              f"used an OLS slope with a cluster-robust standard error over {n_groups} "
-              f"groups instead. The row is tagged fit_method=ols_cluster_robust. Its "
-              f"p-value accounts for correlation inside a group and is NOT a naive "
-              f"least-squares p.")
 
     A = np.vstack([x, np.ones_like(x)]).T
     coef, *_ = np.linalg.lstsq(A, y, rcond=None)
@@ -546,16 +590,14 @@ def report_ece(y, p, prefix: str = "value", cluster_ids=None,
                n_boot: int = N_BOOT) -> Dict:
     res = bootstrap_scalar_metric_2arr(y, p, ece_value, cluster_ids=cluster_ids,
                                        n_boot=n_boot)
-    return _pack(prefix, res["point"], res["std"], res["ci_lower"],
-                 res["ci_upper"], res["n"], is_percent=True)
+    return _pack_bootstrap(prefix, res, is_percent=True)
 
 
 def report_risk_coverage_auc(y, p, prefix: str = "value", cluster_ids=None,
                              n_boot: int = N_BOOT) -> Dict:
     res = bootstrap_scalar_metric_2arr(y, p, risk_coverage_auc_value,
                                        cluster_ids=cluster_ids, n_boot=n_boot)
-    return _pack(prefix, res["point"], res["std"], res["ci_lower"],
-                 res["ci_upper"], res["n"], is_percent=True)
+    return _pack_bootstrap(prefix, res, is_percent=True)
 
 
 def report_raw_stat(value: float, prefix: str, n=None, p_raw=None) -> Dict:

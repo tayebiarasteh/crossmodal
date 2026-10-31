@@ -5,8 +5,8 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import os
+import re
 from typing import Dict, List
 
 import numpy as np
@@ -14,6 +14,7 @@ import pandas as pd
 
 from analysis._common import (conditioning_axes, enabled_cohorts, ladder_models,
                               panel_models, run_analysis, unit_key)
+from analysis.e4_exposure import _COMPARISON, _DEVICE, _LATERAL, _MEASURE
 from config.serde import read_config
 from data_loader.build_paired_pool import load_pool, load_reports
 from data_loader.build_utils import read_csv_defensively, write_manifest
@@ -22,6 +23,39 @@ from Inference.resume_utils import MissingInput
 from linkage.conditioning import load_conditioned, load_conditioned_counts
 from linkage.instrument import run_instrument
 from linkage.retrieval import load_records
+
+
+_AXES = {"laterality": _LATERAL, "measurement": _MEASURE, "device": _DEVICE,
+         "comparison": _COMPARISON,
+         "severity": re.compile(r"\b(?:mild|moderate|severe|small|large|extensive|trace|"
+                                r"minimal|marked|slight|significant)\w*\b", re.I),
+         "hedging": re.compile(r"\b(?:may|might|could|possible|possibly|probable|probably|"
+                               r"suspect\w*|equivocal|questionable|apparent\w*|likely|"
+                               r"cannot exclude|not excluded|concerning for)\b", re.I)}
+
+
+def _axis_retention(cfg: dict, cohort: str, transform: str, sample: List[str]) -> pd.DataFrame:
+    ref = load_reports(cfg, cohort, "T0").drop_duplicates("study_id")
+    ref = ref[ref["study_id"].astype(str).isin(set(sample))]
+    new = load_reports(cfg, cohort, transform).drop_duplicates("study_id")
+    new = new.set_index(new["study_id"].astype(str)).reindex(ref["study_id"].astype(str))
+    if ref.empty or new["report_text"].isna().all():
+        raise MissingInput(f"{cohort}/{transform}: no sampled study has both reports")
+    pool = (load_pool(cfg, cohort, usecols=["study_id", "patient_id"])
+            .drop_duplicates("study_id"))
+    pid = (pool.set_index(pool["study_id"].astype(str))
+           .reindex(ref["study_id"].astype(str))["patient_id"].astype(str))
+    out = pd.DataFrame({"study_id": ref["study_id"].astype(str).values,
+                        "patient_id": pid.values})
+    before = ref["report_text"].astype(str)
+    after = new["report_text"].fillna("").astype(str)
+    for name, rx in _AXES.items():
+        b = before.map(lambda s, _r=rx: bool(_r.search(s))).to_numpy()
+        a = after.map(lambda s, _r=rx: bool(_r.search(s))).to_numpy()
+        col = np.full(len(out), np.nan)
+        col[b] = a[b].astype(float)
+        out[f"axis__{name}"] = col
+    return out
 
 
 def _sample_path(cfg: dict, cohort: str) -> str:
@@ -107,9 +141,31 @@ def run_e5(cfg_path: str, force: bool = False) -> pd.DataFrame:
               for m in ladder_models(cfg) for c in enabled_cohorts(cfg) for t in transforms
               for k in conditioning_axes(cfg, "e5_transform")]
     units += [unit_key(content=c, transform=t) for c in enabled_cohorts(cfg) for t in transforms]
+    units += [unit_key(axes=c, transform=t) for c in enabled_cohorts(cfg) for t in transforms]
 
     def compute(unit: str) -> List[Dict]:
         p = dict(x.split("-", 1) for x in unit.split("__"))
+
+        if "axes" in p:
+            cohort, transform = p["axes"], p["transform"]
+            sample = _content_sample(cfg, cohort, n_sample, seed)
+            per_study = _axis_retention(cfg, cohort, transform, sample)
+            clusters = per_study["patient_id"].astype(str).to_numpy()
+            ident = {"cohort": cohort, "transform": transform, "experiment": "E5",
+                     "analysis": "content_axis", "fdr_family": f"E5_axis_{cohort}"}
+            rows = []
+            for name in _AXES:
+                v = per_study[f"axis__{name}"].to_numpy(float)
+                ok = np.isfinite(v)
+                if ok.sum() < 10:
+                    continue
+                rows.append(R.metric(v[ok], name="content_axis_retained",
+                                     cluster_ids=clusters[ok],
+                                     **{**ident, "covariate": name}))
+            if not rows:
+                raise MissingInput(f"{cohort}/{transform}: fewer than ten sampled studies state "
+                                   f"any of the finer axes in their original report")
+            return rows
 
         if "content" in p:
             cohort, transform = p["content"], p["transform"]

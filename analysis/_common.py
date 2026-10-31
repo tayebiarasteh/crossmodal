@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import os
 from typing import Callable, List, Optional
 
@@ -88,7 +87,6 @@ def run_analysis(cfg: dict, name: str, units: List[str],
         df["significant_fdr05"] = df["p_fdr"] < alpha
     out = os.path.join(analysis_dir(cfg, name), f"{name}_rows.csv")
     write_rows(df.to_dict("records"), out)
-    print(f"[{name}] {out}  ({len(df)} rows)", flush=True)
     return df
 
 
@@ -98,8 +96,6 @@ def invalidate_partials(cfg: dict, name: str, contains: str = "") -> int:
            if f.endswith(".jsonl") and (contains in f if contains else True)]
     for f in hit:
         os.remove(os.path.join(pdir, f))
-    what = f"whose key contains {contains!r}" if contains else "(every unit)"
-    print(f"[invalidate_partials] {name}: removed {len(hit)} cached units {what}", flush=True)
     return len(hit)
 
 
@@ -107,4 +103,4 @@ def load_analysis(cfg: dict, name: str) -> pd.DataFrame:
     path = os.path.join(analysis_dir(cfg, name), f"{name}_rows.csv")
     if not os.path.exists(path):
         raise MissingInput(f"{name} has not run; its rows are not on disk")
-    return pd.read_csv(path)
+    return pd.read_csv(path, low_memory=False, float_precision="round_trip")

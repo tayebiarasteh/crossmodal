@@ -5,10 +5,10 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
+import hashlib
 import json
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -52,6 +52,36 @@ def _match_mask(q: pd.Series, studies: pd.DataFrame, attrs: List[str]) -> np.nda
     return mask
 
 
+def _attribute_levels(studies: pd.DataFrame, attrs: List[str]) -> Dict[str, List[str]]:
+    out = {a: sorted({str(v) for v in studies[a]}) for a in attrs if a in studies.columns}
+    if "view" in attrs and "views" in studies.columns:
+        out["view"] = sorted({str(v) for vs in studies["views"] for v in vs})
+    return out
+
+
+def _noisy_query(q: pd.Series, cid: str, attrs: List[str], rate: float, width: int,
+                 levels: Dict[str, List[str]]) -> pd.Series:
+    out = dict(q)
+    for a in attrs:
+        seed = int.from_bytes(hashlib.blake2b(f"{cid}|{a}".encode(), digest_size=4).digest(),
+                              "big")
+        u = np.random.default_rng(seed).random(2)
+        if u[0] >= rate:
+            continue
+        cur = str(q.get(a, ""))
+        if a in ("age_band", "study_year"):
+            step = (1 if u[1] < 0.5 else -1) * (width if a == "age_band" else 1)
+            try:
+                out[a] = str(int(float(cur)) + step)
+            except (TypeError, ValueError):
+                continue
+        else:
+            alt = [v for v in levels.get(a, []) if v != cur]
+            if alt:
+                out[a] = alt[min(int(u[1] * len(alt)), len(alt) - 1)]
+    return pd.Series(out)
+
+
 def _hard_negative_mask(q_labels: np.ndarray, corpus_labels: np.ndarray,
                         true_row: int, n_keep: int) -> np.ndarray:
     obs = np.isfinite(q_labels) & np.isfinite(corpus_labels)
@@ -67,14 +97,16 @@ def _hard_negative_mask(q_labels: np.ndarray, corpus_labels: np.ndarray,
 
 
 def _records_path(cfg: dict, model: str, cohort: str, transform: str, variant: str,
-                  split: str, conditioning: str) -> str:
+                  split: str, conditioning: str, noise_rate: float = 0.0) -> str:
     d = os.path.join(cfg["paths"]["linkage_dir"], model, cohort)
-    return os.path.join(d, f"cond_{conditioning}_{variant}_{transform}_{split}.csv")
+    tag = conditioning if not noise_rate else f"{conditioning}_noise{noise_rate:.2f}"
+    return os.path.join(d, f"cond_{tag}_{variant}_{transform}_{split}.csv")
 
 
 def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
                               cohorts: Optional[List[str]] = None, transform: str = "T0",
                               variant: str = "off_shelf", split: str = "test",
+                              noise_rate: float = 0.0,
                               force: bool = False, device: str = "cuda") -> List[str]:
     params = read_config(cfg_path)
     cfg = params["CrossModal"]
@@ -86,6 +118,10 @@ def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
         raise KeyError(f"conditioning {conditioning!r} is not in config; "
                        f"available: {sorted(ccfg['sets'])} plus 'hard_negative'")
     attrs = [] if conditioning == "hard_negative" else list(ccfg["sets"][conditioning])
+    noise_rate = float(noise_rate)
+    if noise_rate and (conditioning == "hard_negative" or not attrs):
+        raise KeyError("a noise rate applies to the attributes an adversary matches on, so it "
+                       "is not defined for the hard-negative pool or for no conditioning")
     width = int(ccfg.get("age_band_years", 5))
     min_pool = int(ccfg.get("min_pool_size", 50))
     findings = list(cfg["labels"]["findings"])
@@ -99,12 +135,13 @@ def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
             continue
 
         path = _records_path(cfg, embedding_key(model, variant), cohort, transform,
-                             variant, split, conditioning)
+                             variant, split, conditioning, noise_rate)
         meta = path.replace(".csv", ".buildparams.json")
         want = {"model": embedding_key(model, variant), "cohort": cohort, "transform": transform,
                 "variant": variant, "split": split, "conditioning": conditioning,
                 "attributes": attrs, "age_band_years": width, "min_pool_size": min_pool,
-                "hard_neg_pool": int(ccfg.get("hard_neg_pool", 10000))}
+                "hard_neg_pool": int(ccfg.get("hard_neg_pool", 10000)),
+                "noise_rate": noise_rate}
         if not force and os.path.exists(path) and os.path.exists(meta):
             with open(meta) as f:
                 stored = json.load(f)
@@ -113,7 +150,6 @@ def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
                 append_status(status_dir, stage, f"{cohort}/{conditioning}: cached, skipping")
                 written.append(path)
                 continue
-            print(f"[{stage}] REBUILD {os.path.basename(path)}: {moved}", flush=True)
 
         pool = load_pool(cfg, cohort, usecols=["case_id", "split", "patient_id", "study_id",
                                                "view", "age", "sex", "study_year", "site"] + findings)
@@ -145,6 +181,7 @@ def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
                                * 1e9 / (4.0 * max(len(studies), 1)))))
         rows, dropped, singleton = [], 0, 0
         pid_col = qmeta["patient_id"].astype(str).to_numpy()
+        levels = _attribute_levels(sattr, attrs) if noise_rate else {}
         for lo in tqdm(range(0, len(q_ids), chunk), desc=f"{model}:{cohort}/{conditioning}"):
             hi = min(lo + chunk, len(q_ids))
             S = (Q[lo:hi].to(device) @ Cd.T).cpu().numpy()
@@ -154,8 +191,13 @@ def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
                 tr = sid_to_row.get(sid)
                 if tr is None:
                     continue
+                true_in = True
                 if conditioning == "hard_negative":
                     mask = _hard_negative_mask(slab[tr], slab, tr, n_keep)
+                elif noise_rate:
+                    mask = _match_mask(_noisy_query(qmeta.iloc[j], cid, attrs, noise_rate,
+                                                    width, levels), sattr, attrs)
+                    true_in = bool(mask[tr])
                 else:
                     mask = _match_mask(qmeta.iloc[j], sattr, attrs)
                     mask[tr] = True
@@ -169,9 +211,13 @@ def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
                     continue
                 idx = np.flatnonzero(mask)
                 s = S[j - lo][idx]
-                local_true = int(np.searchsorted(idx, tr))
-                ts = float(s[local_true])
-                rank = int((s > ts).sum()) + 1
+                if true_in:
+                    local_true = int(np.searchsorted(idx, tr))
+                    ts = float(s[local_true])
+                    rank = int((s > ts).sum()) + 1
+                else:
+                    ts = float("nan")
+                    rank = n_i + 1
                 order = np.argsort(-s, kind="stable")[:2]
                 s1 = float(s[order[0]])
                 s2 = float(s[order[1]]) if n_i > 1 else float("nan")
@@ -181,7 +227,7 @@ def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
                     "split": split, "conditioning": conditioning,
                     "rank": rank, "true_score": ts, "s1": s1, "s2": s2, "margin": s1 - s2,
                     "top1_study_id": studies[int(idx[order[0]])],
-                    "n_corpus": n_i,
+                    "n_corpus": n_i, "true_in_pool": int(true_in),
                 })
             del S
         del Cd
@@ -207,29 +253,35 @@ def build_conditioned_records(cfg_path: str, model: str, conditioning: str,
         with open(counts + ".tmp", "w") as f:
             json.dump({"n_query_total": int(len(q_ids)), "n_kept": int(len(out)),
                        "n_dropped": int(dropped), "n_singleton_pool": int(singleton),
-                       "min_pool_size": min_pool}, f, indent=2, sort_keys=True)
+                       "min_pool_size": min_pool, "noise_rate": noise_rate,
+                       "n_true_report_excluded": int((out["true_in_pool"] == 0).sum())},
+                      f, indent=2, sort_keys=True)
         os.replace(counts + ".tmp", counts)
         append_status(status_dir, stage,
                       f"{cohort}/{conditioning}: {len(out)} queries kept, {dropped} below the "
                       f"minimum candidate set ({singleton} of them uniquely identified), "
                       f"median candidates {int(out['n_corpus'].median())}, "
-                      f"Recall@1 {100.0 * out['correct'].mean():.3f}%")
+                      f"Recall@1 {100.0 * out['correct'].mean():.3f}%"
+                      + (f", noise {noise_rate:.2f} left the true report out of "
+                         f"{int((out['true_in_pool'] == 0).sum())} pools" if noise_rate else ""))
         written.append(path)
-        print(f"[{stage}] {path}", flush=True)
     return written
 
 
 def load_conditioned(cfg: dict, model: str, cohort: str, conditioning: str,
                      transform: str = "T0", variant: str = "off_shelf",
-                     split: str = "test") -> pd.DataFrame:
+                     split: str = "test", noise_rate: float = 0.0) -> pd.DataFrame:
     path = _records_path(cfg, embedding_key(model, variant), cohort, transform,
-                         variant, split, conditioning)
+                         variant, split, conditioning, noise_rate)
     if not os.path.exists(path):
-        raise MissingInput(f"no conditioned records for {model}/{cohort}/{conditioning}. "
-                           f"Run main_build_conditioned_records(model='{model}', "
-                           f"conditioning='{conditioning}').")
+        raise MissingInput(f"no conditioned records for {model}/{cohort}/{conditioning} at noise "
+                           f"{noise_rate:.2f}. Run main_build_conditioned_records("
+                           f"model='{model}', conditioning='{conditioning}', "
+                           f"noise_rate={noise_rate}).")
     df = pd.read_csv(path, dtype={"case_id": str, "patient_id": str, "study_id": str,
                                   "top1_study_id": str})
+    if "true_in_pool" not in df.columns:
+        df["true_in_pool"] = 1
     if "tied_at_top" not in df.columns:
         add_tied_at_top(df)
     return df
@@ -237,9 +289,9 @@ def load_conditioned(cfg: dict, model: str, cohort: str, conditioning: str,
 
 def load_conditioned_counts(cfg: dict, model: str, cohort: str, conditioning: str,
                             transform: str = "T0", variant: str = "off_shelf",
-                            split: str = "test") -> dict:
-    path = _records_path(cfg, embedding_key(model, variant), cohort, transform,
-                         variant, split, conditioning).replace(".csv", ".counts.json")
+                            split: str = "test", noise_rate: float = 0.0) -> dict:
+    path = _records_path(cfg, embedding_key(model, variant), cohort, transform, variant,
+                         split, conditioning, noise_rate).replace(".csv", ".counts.json")
     if not os.path.exists(path):
         return {}
     with open(path) as f:

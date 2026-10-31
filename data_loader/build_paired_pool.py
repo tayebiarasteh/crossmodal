@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import json
 import os
 from typing import Dict, List, Optional
@@ -18,7 +17,7 @@ from config.serde import read_config
 from data_loader.build_utils import (assert_unique_case_ids, binarize_presence,
                                      make_case_ids, normalize_report_text,
                                      normalize_split, read_csv_defensively,
-                                     report_pool, write_manifest)
+                                     write_manifest)
 from Inference.resume_utils import MissingInput
 
 
@@ -212,10 +211,9 @@ def build_paired_pool(cfg_path: str, cohort: str, force: bool = False) -> str:
             n = len(pd.read_csv(pool_path, usecols=["case_id"]))
             if n > 0:
                 append_status(status_dir, stage, f"already built: {n} rows; skipping")
-                print(f"[{stage}] already built ({n} rows). Use force=True to rebuild.", flush=True)
                 return pool_path
         else:
-            print(f"[{stage}] REBUILD: build parameters moved: {moved}", flush=True)
+            pass
 
     master_csv = ccfg["master_csv"]
     if not os.path.exists(master_csv):
@@ -237,7 +235,7 @@ def build_paired_pool(cfg_path: str, cohort: str, force: bool = False) -> str:
     use = [c for c in wanted if c in head.columns]
     dropped = [c for c in wanted if c not in head.columns]
     if dropped:
-        print(f"[{stage}] columns named in config but absent from the master list: {dropped}", flush=True)
+        pass
     master = read_csv_defensively(master_csv, dtype=dtypes, usecols=use)
     n_raw = len(master)
 
@@ -266,8 +264,6 @@ def build_paired_pool(cfg_path: str, cohort: str, force: bool = False) -> str:
                 "Falling back to the image path would put one report in the corpus once per "
                 "image and the rank of the true report would not be defined.")
         master["study_id"] = derived.values
-        print(f"[{stage}] study_id derived from the image path: {len(master)} images over "
-              f"{derived.nunique()} studies", flush=True)
     else:
         master["study_id"] = master[ccfg["image_key_col"]].astype(str)
 
@@ -384,11 +380,9 @@ def build_paired_pool(cfg_path: str, cohort: str, force: bool = False) -> str:
                   indent=2, sort_keys=True)
     os.replace(side + ".tmp", side)
 
-    report_pool(out, findings, stage)
     n_pat = out["patient_id"].nunique()
     append_status(status_dir, stage,
                   f"wrote {len(out)} rows, {n_pat} patients, {out['study_id'].nunique()} studies")
-    print(f"[{stage}] {pool_path}\n[{stage}] {text_path}", flush=True)
     return pool_path
 
 

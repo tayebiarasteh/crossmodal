@@ -4,8 +4,8 @@ user_home:  /PATH
 datasets_root: /PATH/datasets
 
 xray_root:     "${datasets_root}/XRay"
-outputs_root:  "${ocean_root}/PATH/crossmodal"
-repo_root:     "${home_root}/PATH/crossmodal"
+outputs_root:  "${ocean_root}/crossmodal"
+repo_root:     "${home_root}/crossmodal"
 manifests_dir: "${outputs_root}/manifests"
 
 CrossModal:
@@ -21,6 +21,7 @@ CrossModal:
     linkage_dir:     "${outputs_root}/linkage"
     analysis_dir:    "${outputs_root}/analysis"
     heads_dir:       "${outputs_root}/heads"
+
     results_dir:     "${outputs_root}/results"
     status_dir:      "${outputs_root}/status"
 
@@ -36,11 +37,12 @@ CrossModal:
     mimic:
       enabled: true
       role: "development"
-      master_csv:   "${xray_root}/MIMIC/MASTERLIST.csv"
+      master_csv:   "${xray_root}/MIMIC/mimic.csv"
       image_root:   "${xray_root}/MIMIC"
       report_mode:  "file"
       report_col:   "report_rel_path"
       report_root:  "${xray_root}/MIMIC"
+
       report_sections_from: "parser"
       image_key_col: "jpg_rel_path"
       patient_col:  "subject_id"
@@ -52,16 +54,18 @@ CrossModal:
       sex_col:      "gender"
       date_col:     "StudyDate"
       site_col:     null
+
       source_resolution: 224
 
     chexpert:
       enabled: true
       role: "external"
-      master_csv:   "${xray_root}/CheXpert-v1.0/masterlist.csv"
+      master_csv:   "${xray_root}/CheXpert-v1.0/master.csv"
       image_root:   "${xray_root}"
       report_mode:  "join_csv"
       report_csv:   "${xray_root}/CheXpert-v1.0/chexpert_plus.csv"
       report_join_col: "jpg_rel_path"
+
       report_full_cols: [report]
       report_section_cols: [section_findings, section_impression]
       report_impression_cols: [section_impression]
@@ -69,6 +73,7 @@ CrossModal:
       image_key_col: "jpg_rel_path"
       patient_col:  "subject_id"
       study_col:    null
+
       study_from_path: "(patient[0-9]+/study[0-9]+)"
       split_col:    "split"
       view_col:     "view"
@@ -101,10 +106,13 @@ CrossModal:
       sex_col:      "PatientSex"
       date_col:     "StudyDate"
       site_col:     "InstitutionName"
+
       labels_source: "llm_labeler"
+
       source_resolution: 224
 
   split:
+
     rebuild_from_patients: true
     test_frac:  0.20
     valid_frac: 0.10
@@ -135,6 +143,7 @@ CrossModal:
       axis_role: "objective"
       image_size: 512
       max_text_tokens: 64
+
       embed_dim: 1024
     pubmedclip:
       hf_id: "flaviagiammarino/pubmed-clip-vit-base-patch32"
@@ -166,6 +175,7 @@ CrossModal:
       type: "biovilt"
       specialization: "radiology"
       axis_role: "most_specialized"
+
       image_size: 448
       max_text_tokens: 512
       embed_dim: 128
@@ -193,6 +203,7 @@ CrossModal:
     num_workers: 10
     shard_rows: 20000
     dtype: "float32"
+
     splits: [test]
 
   report_transforms:
@@ -208,11 +219,11 @@ CrossModal:
 
   serving:
     backend:          api
-    api_base_url:     "YOUR_SERVER_BASE_URL_HERE"
+    api_base_url:     "YOUR_SERVING_URL_HERE"
     api_base_url_env: CROSSMODALITY_API_BASE_URL
     api_key:          "YOUR_API_KEY_HERE"
     api_key_env:      CROSSMODALITY_API_KEY
-    verify_ssl:       false
+    verify_ssl:       true
     timeout_s:        120
     timeout_per_token_s: 0.12
     timeout_request_max_s: 1200
@@ -221,14 +232,17 @@ CrossModal:
     retry_backoff_max_s: 30
     connect_retry_max_s: 600
     rate_limit_retries: 8
+
     max_consecutive_failures: 30
     concurrency:      32
     request_batch_size: 1
     progress_bars:    true
 
   llm:
+
     hf_id: "Qwen/Qwen3.5-122B-A10B"
     served_name: "Qwen/Qwen3.5-122B-A10B-GPTQ-Int4"
+
     recipe_group: "qwen3"
     thinking: "off"
     load_4bit: true
@@ -237,19 +251,24 @@ CrossModal:
     top_p: 1.0
     seed: 0
     shard_rows: 2000
+
     max_unanswered_frac: 0.10
 
   instrument:
+
     decision_statistics: [margin, top1_score, ratio]
     default_statistic: "margin"
     budgets_k: [10, 100, 1000]
     budget_curve_fracs: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0]
     fpr_levels: [0.01, 0.001]
     score_chunk_rows: 2048
+
     score_chunk_max_gb: 4.0
+
     overlap_strata: 10
 
   conditioning:
+
     sets:
       none:     []
       sex:      [sex]
@@ -257,35 +276,89 @@ CrossModal:
       view:     [view]
       year:     [study_year]
       site:     [site]
+
       demographics: [sex, age_band, view]
       all:      [sex, age_band, view, study_year]
     age_band_years: 5
+
     min_pool_size: 2
+
     hard_neg_pool: 10000
+
+    noise_rates: [0.05, 0.10, 0.20]
+    noise_models: [medsiglip]
+
     analysis_axes:
       e4_exposure:   [demographics, all]
       e5_transform:  [demographics]
       e6_defense:    [demographics]
+
       e3_report_map: [demographics]
+
       e2_agreement:  [demographics]
+
       e7_ranking:    [demographics]
+
+      e2_noisy:          [demographics]
+      e9_openset:        [demographics]
+      e11_multivariable: [demographics]
+      e10_matched:       [demographics, all]
+
     ladder_models: [biovilt, medsiglip, clip_b32]
+
+  openset:
+    absent_fracs: [0.25, 0.5, 1.0]
+    seed: 0
+
+  pool_scale:
+    conditioning: demographics
+    scopes:
+      three_datasets:
+        query_cohorts: [mimic, chexpert, rexgradient]
+        bank_cohorts:  [mimic, chexpert, rexgradient]
+        splits:        [test]
+        models:        [biovilt, medsiglip, clip_b32]
+      full_dataset:
+        query_cohorts: [mimic, rexgradient]
+        bank_cohorts:  []
+        splits:        [train, val, test]
+        models:        [medsiglip]
 
   heads:
     backbone: "biovilt"
     train_cohort: "mimic"
     temperature: 0.07
+
     num_workers: 0
+
     hidden_dim: 512
     out_dim: 128
+
+    contrasts:
+      - {variant: dp,         baseline: nonprivate_matched}
+      - {variant: dp_inbatch, baseline: nonprivate_matched}
     variants:
       plain:
+
         private: false
         lr: 0.005
         weight_decay: 0.01
         batch_size: 512
         num_epochs: 50
         select_on: "valid_selective_precision"
+
+        negatives: "in_batch"
+
+      nonprivate_matched:
+        private: false
+        lr: 0.005
+        weight_decay: 0.01
+        batch_size: 128
+        num_epochs: 150
+        select_on: "valid_selective_precision"
+        negatives: "fixed_bank"
+        negative_bank_size: 4096
+
       random_disruption:
         kind: "random_orthogonal"
         private: false
@@ -319,8 +392,10 @@ CrossModal:
         delta: 6.0e-6
         gn_num_groups: 32
         select_on: "valid_selective_precision"
+
         negatives: "fixed_bank"
         negative_bank_size: 4096
+
         report_patient_level: true
 
   utility:
@@ -334,12 +409,16 @@ CrossModal:
     zero_shot:
       prompt_positive: "findings consistent with {finding}"
       prompt_negative: "no evidence of {finding}"
+
     t2i_sample: 5000
+
     probe_cohorts: [mimic]
 
   report_map:
     rare_prevalence: 0.02
+
     min_recovered_for_agreement: 10
+
     min_fold_for_agreement: 2.0
 
   content_check:

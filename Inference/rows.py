@@ -5,7 +5,6 @@ Created on July 14, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -35,6 +34,10 @@ IDENT_COLS: List[str] = [
     "fpr",
     "at",
     "conditioning",
+    "absent_frac",
+    "noise_rate",
+    "corpus_scope",
+    "policy",
     "model_a",
     "model_b",
     "covariate",
@@ -65,6 +68,8 @@ METRIC_COLS: List[str] = [
     "kind", "readout", "metric", "description", "direction", "unit",
     "mean_pct", "std_pct", "ci_low_pct", "ci_high_pct",
     "mean_raw", "std_raw", "ci_low_raw", "ci_high_raw",
+    "point_raw", "central_estimator", "n_boot_finite",
+    "point_in_ci", "mean_in_ci",
     "n", "n_a", "n_b", "p_raw", "p_fdr", "significant_fdr05",
 ]
 
@@ -113,6 +118,29 @@ NAME_MAP: Dict[str, Tuple[str, str, str]] = {
         "the original labels, per study and then macro-averaged over findings. The "
         "clinical content a report-side transformation keeps.",
         "higher_better", "percent"),
+    "openset_false_match_rate": (
+        "Among the k queries the adversary is most confident about, the fraction whose "
+        "true report was not in the candidate pool at all. Every one of those is a "
+        "confident wrong match, so this is what the adversary pays for acting on a "
+        "pool that may not hold the answer. Read `absent_frac` for the share of "
+        "queries whose report was removed.",
+        "lower_better", "percent"),
+    "openset_margin_auroc": (
+        "AUROC of the confidence margin at separating a query whose true report is in "
+        "the pool from the same query with its report removed, paired within the "
+        "query. 50 means the margin carries nothing about whether the answer is "
+        "there, so the adversary cannot tell the two situations apart.",
+        "none", "percent"),
+    "report_states_attribute": (
+        "Fraction of reports whose own text states this attribute, so an adversary "
+        "holding reports and no metadata table can read it off the text. Read "
+        "`covariate` for which attribute.", "none", "percent"),
+    "content_axis_retained": (
+        "Fraction of the reports that stated this kind of clinical detail whose "
+        "transformed version still states it. Read `covariate` for the axis: "
+        "laterality, severity, a measurement, device detail, a comparison with a "
+        "prior study, or hedged wording. Finer than whole-report label agreement, "
+        "which a label vector cannot express.", "higher_better", "percent"),
     "content_concept_recall": (
         "Fraction of the findings the ORIGINAL report asserted that the transformed "
         "report still asserts. Agreement alone is dominated by the many findings a "
@@ -337,7 +365,7 @@ NAME_MAP: Dict[str, Tuple[str, str, str]] = {
         "E6 HEADLINE. Does the CEC arm move this modality off chance, where every "
         "frozen reference encoder sits at 50.0?", "none", "raw"),
     "e6_no_regression_held": (
-        "E6. Do the CEC-trained encoders avoid getting worse on the fine-grained "
+        "Do the CEC-trained encoders avoid getting worse on the fine-grained "
         "tasks the frozen regime already solves?", "none", "raw"),
     "e7_no_harm_held": (
         "E7. Task AUROC must not degrade under CEC. 1 means the geometric fix costs "
@@ -409,6 +437,12 @@ NAME_MAP: Dict[str, Tuple[str, str, str]] = {
         "under case_set='untied'. At T7 the text is generated from the 14 labels and "
         "duplicates are common, so this is what separates recovery from degeneracy.",
         "none", "raw"),
+    "noisy_true_in_pool_share": (
+        "Share of the queries whose own report is still a candidate once the adversary's "
+        "side information carries errors at the rate in `noise_rate`. The rest are "
+        "queries no ranking can win, and they are kept and counted as failures rather "
+        "than dropped, since dropping them would measure the attack on the pools the "
+        "noise happened to leave intact.", "none", "raw"),
     "singleton_pool_queries": (
         "Queries whose conditioned candidate set holds exactly one study, meaning the "
         "attributes the release publishes identify that study uniquely with no model "
@@ -448,6 +482,30 @@ NAME_MAP: Dict[str, Tuple[str, str, str]] = {
         "Below ten, the exposure comparison is not reported at all, so a table can "
         "never show a content difference estimated on a handful of reports.",
         "lower_better", "raw"),
+    "openset_absent_share": (
+        "The measured share of queries assigned to the absent half, beside the share "
+        "that was asked for in `absent_frac`. The assignment is a deterministic draw "
+        "per query id, so this says the draw landed where it was aimed.",
+        "none", "raw"),
+    "openset_undefined_count": (
+        "Queries whose candidate pool holds no second candidate once their own report "
+        "is removed, so no margin can be formed for them and they are left out of "
+        "every mixture instead of being given a stand-in value.", "none", "raw"),
+    "report_covariate_slope_adjusted": (
+        "Slope of a recoverability outcome on one standardized report covariate with "
+        "every other covariate and the log candidate-pool size held fixed in one "
+        "model, with a patient cluster-robust standard error. The unadjusted slope of "
+        "the same covariate is `report_covariate_slope`; the pair says how much of a "
+        "covariate's apparent effect is the pool size and the other covariates.",
+        "none", "raw"),
+    "covariate_vif": (
+        "Variance inflation factor of one covariate in the adjusted model. It says "
+        "how far the covariates share information, which is what decides whether an "
+        "individual adjusted slope can be read at all.", "lower_better", "raw"),
+    "n_shared_queries": (
+        "Number of queries every adversary in a matched comparison was evaluated on. "
+        "The comparison is only like for like on the queries all of them hold, so the "
+        "count travels with every row of it.", "none", "raw"),
     "report_covariate_slope": (
         "Standardized slope of a recoverability outcome on one report covariate, "
         "from a mixed model with a PATIENT random intercept. Read `covariate` for "
@@ -536,6 +594,9 @@ NAME_ALIASES: Dict[str, str] = {
 }
 
 STAT_MEASURES = {
+    "openset_absent_share", "openset_undefined_count", "n_shared_queries",
+    "noisy_true_in_pool_share",
+    "report_covariate_slope_adjusted", "covariate_vif",
     "fold_over_chance", "chance_precision", "n_corpus", "selective_hits",
     "tied_at_top_count", "queries_dropped_below_min_pool", "singleton_pool_queries",
     "recovered_jaccard", "recovered_odds_ratio_mh", "recovered_both",
@@ -612,6 +673,11 @@ def _finish_metric(packed: Dict, prefix: str, name: str, unit: str,
         "ci_low_pct":  packed.get(f"{prefix}_ci_low", np.nan),
         "ci_high_pct": packed.get(f"{prefix}_ci_high", np.nan),
         "mean_raw":    packed.get(f"{prefix}_mean_raw", np.nan),
+        "point_raw": packed.get(f"{prefix}_point_raw", np.nan),
+        "central_estimator": packed.get("central_estimator", ""),
+        "n_boot_finite": packed.get("n_boot_finite", np.nan),
+        "point_in_ci": packed.get("point_in_ci", ""),
+        "mean_in_ci": packed.get("mean_in_ci", ""),
         "std_raw":     packed.get(f"{prefix}_std_raw", np.nan),
         "ci_low_raw":  packed.get(f"{prefix}_ci_low_raw", np.nan),
         "ci_high_raw": packed.get(f"{prefix}_ci_high_raw", np.nan),

@@ -5,7 +5,6 @@ Created on July 14, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 from typing import List, Optional
 
 import numpy as np
@@ -124,6 +123,11 @@ def _iter_cluster_draws(padded: np.ndarray, valid: np.ndarray, n_boot: int, seed
         done += c
 
 
+def _finite_mean(values: np.ndarray) -> float:
+    finite = np.asarray(values)[np.isfinite(values)]
+    return float(finite.mean()) if finite.size else float("nan")
+
+
 def bootstrap_proportion(
     values: np.ndarray,
     cluster_ids: Optional[np.ndarray] = None,
@@ -133,7 +137,7 @@ def bootstrap_proportion(
     values = np.asarray(values, dtype=float)
     n = len(values)
     if n == 0:
-        return {"point": np.nan, "std": np.nan, "ci_lower": np.nan,
+        return {"point": np.nan, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "n": 0}
     if cluster_ids is not None:
         boot_means, = _cluster_bootstrap_means([values], np.asarray(cluster_ids), n_boot, seed)
@@ -143,6 +147,8 @@ def bootstrap_proportion(
         boot_means = values[idx].mean(axis=1)
     return {
         "point":    float(values.mean()),
+        "mean":     float(np.mean(boot_means)),
+        "n_boot_finite": int(np.isfinite(boot_means).sum()),
         "std":      float(boot_means.std(ddof=1)),
         "ci_lower": float(np.percentile(boot_means, 2.5)),
         "ci_upper": float(np.percentile(boot_means, 97.5)),
@@ -162,7 +168,7 @@ def bootstrap_scalar_metric_2arr(
     p = np.asarray(p, dtype=float)
     n = int(len(y))
     if n == 0:
-        return {"point": np.nan, "std": np.nan, "ci_lower": np.nan,
+        return {"point": np.nan, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "n": 0}
     point = float(metric_fn(y, p))
     boot = np.full(n_boot, np.nan, dtype=float)
@@ -182,9 +188,10 @@ def bootstrap_scalar_metric_2arr(
             boot[b] = metric_fn(y[idx], p[idx])
     boot = boot[np.isfinite(boot)]
     if len(boot) == 0:
-        return {"point": point, "std": np.nan, "ci_lower": np.nan,
+        return {"point": point, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "n": n}
-    return {"point": point, "std": float(np.std(boot, ddof=1)),
+    return {"point": point, "mean": _finite_mean(boot),
+           "n_boot_finite": int(np.isfinite(boot).sum()), "std": float(np.std(boot, ddof=1)),
             "ci_lower": float(np.percentile(boot, 2.5)),
             "ci_upper": float(np.percentile(boot, 97.5)), "n": n}
 
@@ -201,7 +208,7 @@ def paired_bootstrap_diff(
     n = len(values_a)
     assert len(values_b) == n, "Both arrays must have equal length."
     if n == 0:
-        return {"point": np.nan, "std": np.nan, "ci_lower": np.nan,
+        return {"point": np.nan, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "p_value": np.nan, "n": 0}
     point = float(values_a.mean() - values_b.mean())
     if cluster_ids is not None:
@@ -221,6 +228,8 @@ def paired_bootstrap_diff(
     p_value    = max(p_value, 1.0 / n_boot)
     return {
         "point":    point,
+        "mean":     float(np.mean(boot_diffs)),
+        "n_boot_finite": int(np.isfinite(boot_diffs).sum()),
         "std":      std,
         "ci_lower": ci_lower,
         "ci_upper": ci_upper,
@@ -241,7 +250,7 @@ def bootstrap_two_sample_diff(
     values_b = np.asarray(values_b, dtype=float)
     n_a, n_b = len(values_a), len(values_b)
     if n_a == 0 or n_b == 0:
-        return {"point": np.nan, "std": np.nan, "ci_lower": np.nan,
+        return {"point": np.nan, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "n_a": n_a, "n_b": n_b}
     point = float(values_a.mean() - values_b.mean())
     if cluster_ids_a is not None:
@@ -259,6 +268,8 @@ def bootstrap_two_sample_diff(
     boot = boot_a - boot_b
     return {
         "point":    point,
+        "mean":     float(np.mean(boot)),
+        "n_boot_finite": int(np.isfinite(boot).sum()),
         "std":      float(boot.std(ddof=1)),
         "ci_lower": float(np.percentile(boot, 2.5)),
         "ci_upper": float(np.percentile(boot, 97.5)),
@@ -373,7 +384,7 @@ def paired_bootstrap_statistic(
     n = len(arrays[0])
     assert all(len(a) == n for a in arrays), "all arrays must be equal length"
     if n == 0:
-        return {"point": np.nan, "std": np.nan, "ci_lower": np.nan,
+        return {"point": np.nan, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "n": 0}
     point = float(stat_fn(*arrays))
     rng   = np.random.RandomState(seed)
@@ -384,10 +395,12 @@ def paired_bootstrap_statistic(
         K = len(unique_c)
         order = np.argsort(inverse, kind="stable")
         counts = np.bincount(inverse, minlength=K)
-        cluster_rows = np.split(order, np.cumsum(counts)[:-1])
+        starts = np.r_[0, np.cumsum(counts)[:-1]]
         for b in range(n_boot):
             draw = rng.randint(0, K, size=K)
-            resample_idx = np.concatenate([cluster_rows[k] for k in draw])
+            lengths = counts[draw]
+            within = np.arange(int(lengths.sum())) - np.repeat(np.cumsum(lengths) - lengths, lengths)
+            resample_idx = order[np.repeat(starts[draw], lengths) + within]
             resampled = [a[resample_idx] for a in arrays]
             try:
                 boot[b] = stat_fn(*resampled)
@@ -403,18 +416,16 @@ def paired_bootstrap_statistic(
                 boot[b] = np.nan
 
     std, lo, hi = _percentile_ci(boot)
-    out = {"point": point, "std": std, "ci_lower": lo, "ci_upper": hi, "n": int(n)}
+    out = {"point": point, "mean": _finite_mean(boot),
+           "n_boot_finite": int(np.isfinite(boot).sum()), "std": std, "ci_lower": lo, "ci_upper": hi, "n": int(n)}
     if return_boot:
         out["boot"] = boot[np.isfinite(boot)]
     return out
 
 
 def _rank_rows(mat: np.ndarray) -> np.ndarray:
-    order = np.argsort(mat, axis=1, kind="quicksort")
-    ranks = np.empty_like(order, dtype=np.float64)
-    row_idx = np.arange(mat.shape[0])[:, None]
-    ranks[row_idx, order] = np.arange(1, mat.shape[1] + 1)[None, :]
-    return ranks
+    from scipy.stats import rankdata
+    return rankdata(mat, method="average", axis=1)
 
 
 def bootstrap_spearman(
@@ -442,7 +453,8 @@ def bootstrap_spearman(
         pos = 0
         for row_idx, row_valid in _iter_cluster_draws(padded, valid, n_boot, seed):
             c = row_idx.shape[0]
-            x_g, y_g = x[row_idx], y[row_idx]
+            x_g = np.where(row_valid, x[row_idx], np.inf)
+            y_g = np.where(row_valid, y[row_idx], np.inf)
             rx, ry = _rank_rows(x_g), _rank_rows(y_g)
             n_valid = row_valid.sum(axis=1, keepdims=True)
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -573,7 +585,7 @@ def bootstrap_auroc(
     y_true, y_score = y_true[mask], y_score[mask]
     n = len(y_true)
     if n < 2 or len(np.unique(y_true)) < 2:
-        return {"point": np.nan, "std": np.nan, "ci_lower": np.nan,
+        return {"point": np.nan, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "n": int(n)}
     point = float(roc_auc_score(y_true, y_score))
 
@@ -593,7 +605,8 @@ def bootstrap_auroc(
         boot = _auroc_batch(y_true[idx], y_score[idx])
 
     std, lo, hi = _percentile_ci(boot)
-    return {"point": point, "std": std, "ci_lower": lo, "ci_upper": hi, "n": int(n)}
+    return {"point": point, "mean": _finite_mean(boot),
+           "n_boot_finite": int(np.isfinite(boot).sum()), "std": std, "ci_lower": lo, "ci_upper": hi, "n": int(n)}
 
 
 def bootstrap_average_precision(
@@ -610,7 +623,7 @@ def bootstrap_average_precision(
     y_true, y_score = y_true[mask], y_score[mask]
     n = len(y_true)
     if n < 2 or y_true.sum() == 0:
-        return {"point": np.nan, "std": np.nan, "ci_lower": np.nan,
+        return {"point": np.nan, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "n": int(n)}
     point = float(average_precision_score(y_true, y_score))
 
@@ -630,7 +643,8 @@ def bootstrap_average_precision(
         boot = _average_precision_batch(y_true[idx], y_score[idx])
 
     std, lo, hi = _percentile_ci(boot)
-    return {"point": point, "std": std, "ci_lower": lo, "ci_upper": hi, "n": int(n)}
+    return {"point": point, "mean": _finite_mean(boot),
+           "n_boot_finite": int(np.isfinite(boot).sum()), "std": std, "ci_lower": lo, "ci_upper": hi, "n": int(n)}
 
 
 def bootstrap_auroc_diff(
@@ -649,7 +663,7 @@ def bootstrap_auroc_diff(
     y_true, score_a, score_b = y_true[mask], score_a[mask], score_b[mask]
     n = len(y_true)
     if n < 2 or len(np.unique(y_true)) < 2:
-        return {"point": np.nan, "std": np.nan, "ci_lower": np.nan,
+        return {"point": np.nan, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "p_value": np.nan, "n": int(n)}
     point = float(roc_auc_score(y_true, score_a) - roc_auc_score(y_true, score_b))
 
@@ -674,7 +688,7 @@ def bootstrap_auroc_diff(
 
     finite = boot[np.isfinite(boot)]
     if finite.size == 0:
-        return {"point": point, "std": np.nan, "ci_lower": np.nan,
+        return {"point": point, "mean": np.nan, "n_boot_finite": 0, "std": np.nan, "ci_lower": np.nan,
                 "ci_upper": np.nan, "p_value": np.nan, "n": int(n)}
     std = float(finite.std(ddof=1)) if finite.size > 1 else np.nan
     ci_lower = float(np.percentile(finite, 2.5))
@@ -682,5 +696,6 @@ def bootstrap_auroc_diff(
     centered = finite - point
     p_value = float(np.mean(np.abs(centered) >= abs(point)))
     p_value = max(p_value, 1.0 / max(finite.size, 1))
-    return {"point": point, "std": std, "ci_lower": ci_lower,
+    return {"point": point, "mean": _finite_mean(finite),
+           "n_boot_finite": int(np.isfinite(finite).sum()), "std": std, "ci_lower": ci_lower,
             "ci_upper": ci_upper, "p_value": p_value, "n": int(n)}

@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 from typing import Dict, List
 
 import numpy as np
@@ -37,6 +36,11 @@ def run_e7(cfg_path: str, force: bool = False) -> pd.DataFrame:
             pass
         e1 = pd.concat(frames, ignore_index=True)
         e1 = e1[(e1["cohort"] == cohort) & (e1["kind"] == "metric")]
+        e1 = e1[e1["variant"].fillna("off_shelf") != "nonprivate_matched"]
+        e1 = e1[e1["transform"] == "T0"]
+        e1 = e1[e1["case_set"].isna() | e1["case_set"].isin(["", "nan"])]
+        if "noise_rate" in e1.columns:
+            e1 = e1[pd.to_numeric(e1["noise_rate"], errors="coerce").fillna(0) == 0]
         cond = (e1["conditioning"].astype(str) if "conditioning" in e1.columns
                 else pd.Series([""] * len(e1), index=e1.index))
         e1 = e1[cond.isin([op]) if op else cond.isin(["", "nan"])]
@@ -46,12 +50,12 @@ def run_e7(cfg_path: str, force: bool = False) -> pd.DataFrame:
         stat = str(cfg["instrument"].get("default_statistic", "margin"))
 
         r1 = (e1[e1["metric"] == "recall_at_1"].drop_duplicates("release")
-              .set_index("release")["mean_pct"])
+              .set_index("release")["mean_raw"])
         spf = e1[(e1["metric"] == "selective_precision")
                  & (pd.to_numeric(e1["budget_k"], errors="coerce") == float(k))]
         if "statistic" in spf.columns:
             spf = spf[spf["statistic"].astype(str).isin([stat, ""])]
-        sp = spf.drop_duplicates("release").set_index("release")["mean_pct"]
+        sp = spf.drop_duplicates("release").set_index("release")["mean_raw"]
         common = sorted(set(r1.index) & set(sp.index))
         if len(common) < 3:
             return []

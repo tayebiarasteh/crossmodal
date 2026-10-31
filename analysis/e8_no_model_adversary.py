@@ -5,7 +5,6 @@ Created on August 14, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 from typing import Dict, List
 
 import pandas as pd

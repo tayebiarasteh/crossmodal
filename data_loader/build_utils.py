@@ -5,7 +5,6 @@ Created on July 14, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import hashlib
 import os
 import re
@@ -176,24 +175,6 @@ def write_manifest(df: pd.DataFrame, path: str) -> str:
 def box_raw_dir(cfg: dict) -> str:
     return os.path.join(cfg["outputs_root"], "box_raw")
 
-
-def report_pool(df: pd.DataFrame, targets: List[str], name: str) -> None:
-    print(f"\n[{name}] {len(df)} rows, {df['dataset'].nunique()} dataset(s), "
-          f"{df['stratum'].nunique()} strata")
-    print(f"[{name}] rows per dataset: "
-          f"{df['dataset'].value_counts().to_dict()}")
-    print(f"[{name}] rows per split  : "
-          f"{df['split'].value_counts().to_dict()}")
-    for t in targets:
-        if t not in df.columns:
-            continue
-        v = pd.to_numeric(df[t], errors="coerce")
-        n_pos = int((v == 1).sum())
-        n_neg = int((v == 0).sum())
-        n_drop = int(v.isna().sum())
-        prev = 100.0 * n_pos / max(n_pos + n_neg, 1)
-        print(f"[{name}]   {t:30s} pos={n_pos:7d} neg={n_neg:7d} "
-              f"discarded={n_drop:7d}  prevalence={prev:5.1f}%")
 
 _WS_RUN = re.compile(r"[ \t]{2,}")
 _BLANKLINE = re.compile(r"(?m)^[\s.,;:]*$")

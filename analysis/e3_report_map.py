@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 from typing import Dict, List
 
 import numpy as np
@@ -36,6 +35,29 @@ def _standardize(v: np.ndarray) -> np.ndarray:
     return (v - np.nanmean(v)) / sd
 
 
+def build_covariates(cfg: dict, cohort: str, rec: pd.DataFrame, findings: List[str],
+                     rare_prevalence: float) -> pd.DataFrame:
+    reports = load_reports(cfg, cohort, "T0").drop_duplicates("study_id").set_index("study_id")
+    pool = load_pool(cfg, cohort, split="test",
+                     usecols=["study_id"] + findings).drop_duplicates("study_id")
+    npos = pool.set_index(pool["study_id"].astype(str))[findings].apply(
+        lambda r: float(np.nansum(r.to_numpy(dtype=float) == 1.0)), axis=1)
+
+    sids = rec["study_id"].astype(str)
+    feats = pd.DataFrame([_features(reports["report_text"].get(s, "")) for s in sids])
+    feats["n_positive_findings"] = [float(npos.get(s, np.nan)) for s in sids]
+
+    lab = pool.set_index(pool["study_id"].astype(str))[findings]
+    prev = (lab == 1.0).sum(axis=0) / np.maximum(lab.notna().sum(axis=0), 1)
+    rare = [f for f in findings if prev.get(f, 1.0) < rare_prevalence]
+    if rare:
+        has_rare = (lab[rare] == 1.0).any(axis=1).astype(float)
+        feats["has_rare_finding"] = [float(has_rare.get(s, 0.0)) for s in sids]
+    else:
+        feats["has_rare_finding"] = 0.0
+    return feats
+
+
 def run_e3(cfg_path: str, force: bool = False) -> pd.DataFrame:
     params = read_config(cfg_path)
     cfg = params["CrossModal"]
@@ -53,24 +75,7 @@ def run_e3(cfg_path: str, force: bool = False) -> pd.DataFrame:
         rec = (load_conditioned(cfg, model, cohort, cond) if cond
                else load_records(cfg, model, cohort, "T0", "off_shelf", "test"))
         rec = rec.reset_index(drop=True)
-        reports = load_reports(cfg, cohort, "T0").drop_duplicates("study_id").set_index("study_id")
-        pool = load_pool(cfg, cohort, split="test",
-                         usecols=["study_id"] + findings).drop_duplicates("study_id")
-        npos = pool.set_index(pool["study_id"].astype(str))[findings].apply(
-            lambda r: float(np.nansum(r.to_numpy(dtype=float) == 1.0)), axis=1)
-
-        sids = rec["study_id"].astype(str)
-        feats = pd.DataFrame([_features(reports["report_text"].get(s, "")) for s in sids])
-        feats["n_positive_findings"] = [float(npos.get(s, np.nan)) for s in sids]
-
-        lab = pool.set_index(pool["study_id"].astype(str))[findings]
-        prev = (lab == 1.0).sum(axis=0) / np.maximum(lab.notna().sum(axis=0), 1)
-        rare = [f for f in findings if prev.get(f, 1.0) < rare_prevalence]
-        if rare:
-            has_rare = (lab[rare] == 1.0).any(axis=1).astype(float)
-            feats["has_rare_finding"] = [float(has_rare.get(s, 0.0)) for s in sids]
-        else:
-            feats["has_rare_finding"] = 0.0
+        feats = build_covariates(cfg, cohort, rec, findings, rare_prevalence)
 
         margin = rec["margin"].to_numpy(dtype=float)
         correct = rec["correct"].to_numpy(dtype=float)
@@ -106,8 +111,6 @@ def run_e3(cfg_path: str, force: bool = False) -> pd.DataFrame:
         return df
 
     if "fit_method" in df.columns:
-        got = df["fit_method"].astype(str).value_counts().to_dict()
-        print(f"[e3_report_map] slope fits: {got}", flush=True)
         n_naive = int((df["fit_method"].astype(str) == "ols_fallback").sum())
         if n_naive:
             raise ValueError(
@@ -150,15 +153,9 @@ def run_e3(cfg_path: str, force: bool = False) -> pd.DataFrame:
                 cohort=cohort, conditioning=op, covariate=cov, outcome=outcome,
                 experiment="E3", analysis="map_agreement",
                 fdr_family=f"E3_agreement_{cohort}_{op or 'full'}"))
-        counted = {"%s/%s" % (c, o or "full"): v for (c, o), v in linking.items()}
-        print(f"[e3_report_map] models counted in the agreement, per cohort and operating "
-              f"point (>= {min_n} recoveries AND >= {min_fold} fold over chance): "
-              f"{counted}", flush=True)
         if not agree:
-            print("[e3_report_map] fewer than three models qualify anywhere, so the "
-                  "cross-model agreement is not reported.", flush=True)
+            pass
         if agree:
             out = os.path.join(analysis_dir(cfg, "e3_report_map"), "e3_map_agreement_rows.csv")
             write_rows(agree, out)
-            print(f"[e3_report_map] {out} ({len(agree)} rows)", flush=True)
     return df

@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import hashlib
 import json
 import os
@@ -56,8 +55,7 @@ def _cache_is_current(path: str, want_params: dict, want_ids: List[str]) -> bool
         return False
     try:
         z = np.load(path, allow_pickle=True)
-    except Exception as exc:
-        print(f"  [cache] unreadable {os.path.basename(path)} ({exc}); rebuilding", flush=True)
+    except Exception:
         return False
     stored = {}
     if "_build_params" in z.files:
@@ -67,14 +65,9 @@ def _cache_is_current(path: str, want_params: dict, want_ids: List[str]) -> bool
             stored = {}
     moved = [k for k, v in want_params.items() if k in stored and stored[k] != v]
     if moved:
-        print(f"  [cache] REBUILD {os.path.basename(path)}: parameters moved: "
-              f"{[(k, stored[k], want_params[k]) for k in moved]}", flush=True)
         return False
     ids = [str(x) for x in z["case_ids"]]
     if ids != list(want_ids):
-        print(f"  [cache] REBUILD {os.path.basename(path)}: the cached case_id list is not the "
-              f"manifest's ({len(ids)} cached against {len(want_ids)} wanted, order compared)",
-              flush=True)
         return False
     return True
 
@@ -123,8 +116,6 @@ def _run_sharded(path: str, n: int, shard_rows: int, encode_block, desc: str,
             os.replace(tmp, spath)
         if out is None:
             out = np.empty((n, block.shape[1]), dtype=np.float32)
-            print(f"  [{desc}] output block {out.nbytes / 1e9:.2f} GB "
-                  f"({n} x {block.shape[1]})", flush=True)
         if block.shape[0] != hi - lo:
             raise RuntimeError(f"{desc}: shard {k} has {block.shape[0]} rows for {hi - lo} cases")
         out[lo:hi] = block
@@ -158,7 +149,6 @@ def _encode_with_oom_recovery(fn, items, batch: int, desc: str):
             torch.cuda.empty_cache()
             if b > 1:
                 b = max(1, b // 2)
-                print(f"  [{desc}] CUDA OOM; halving the batch to {b}", flush=True)
                 continue
             free, total = (torch.cuda.mem_get_info() if torch.cuda.is_available() else (0, 0))
             raise RuntimeError(
@@ -188,12 +178,8 @@ def purge_hub_cache(cfg_path: str, model: str) -> str:
     home = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
     d = os.path.join(home, "hub", "models--" + hf_id.replace("/", "--"))
     if not os.path.isdir(d):
-        print(f"[purge] {model}: nothing cached at {d}", flush=True)
         return d
-    size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(d) for f in fs)
     shutil.rmtree(d, ignore_errors=True)
-    print(f"[purge] {model}: removed {d} ({size / 1e9:.1f} GB). The .npz caches are untouched.",
-          flush=True)
     return d
 
 
@@ -268,7 +254,6 @@ def extract_image_embeddings(cfg_path: str, model: str, cohorts: Optional[List[s
             append_status(status_dir, stage,
                           f"{cohort}/{split}: wrote {emb.shape[0]} x {emb.shape[1]}")
             written.append(path)
-            print(f"[{stage}] {path}", flush=True)
 
     unload()
     return written
@@ -285,7 +270,7 @@ def extract_text_embeddings(cfg_path: str, model: str, cohorts: Optional[List[st
 
     spec = get_spec(model, cfg)
     if spec["type"] == "txrv":
-        raise MissingInput("the TorchXRayVision baseline has no text tower; it never runs text extraction.")
+        raise MissingInput("the TorchXRayVision baseline has no text tower; it never extracts text embeddings.")
     cohorts = cohorts or [c for c, cc in cfg["cohorts"].items() if cc.get("enabled", True)]
     transforms = transforms or list(cfg["report_transforms"]["order"])
     splits = splits or list(cfg["extraction"].get("splits", ["test"]))
@@ -350,7 +335,6 @@ def extract_text_embeddings(cfg_path: str, model: str, cohorts: Optional[List[st
                 append_status(status_dir, stage,
                               f"{cohort}/{transform}/{split}: wrote {emb.shape[0]} x {emb.shape[1]}")
                 written.append(path)
-                print(f"[{stage}] {path}", flush=True)
 
     unload()
     return written

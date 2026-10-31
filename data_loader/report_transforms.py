@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import json
 import os
 import re
@@ -238,7 +237,7 @@ def build_report_transforms(cfg_path: str, cohort: str, transforms: Optional[Lis
                     written.append(out_path)
                     continue
             else:
-                print(f"[{stage}] REBUILD {tkey}: build parameters moved: {moved}", flush=True)
+                pass
 
         append_status(status_dir, stage, f"building {tkey} ({tcfg['name']})")
         if tcfg["kind"] == "llm_rewrite":
@@ -266,6 +265,5 @@ def build_report_transforms(cfg_path: str, cohort: str, transforms: Optional[Lis
             json.dump(want, f, indent=2, sort_keys=True)
         os.replace(tmp, meta_path)
         written.append(out_path)
-        print(f"[{stage}] {tkey}: {out_path}", flush=True)
 
     return written

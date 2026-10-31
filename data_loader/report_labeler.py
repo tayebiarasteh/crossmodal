@@ -5,14 +5,12 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import hashlib
 import json
 import os
 from typing import List
 
 import numpy as np
-import pandas as pd
 
 from config.serde import read_config
 from data_loader.build_paired_pool import load_pool, load_reports
@@ -76,10 +74,9 @@ def label_reports(cfg_path: str, cohort: str, force: bool = False) -> str:
         moved = [k for k, v in want.items() if k in stored and stored[k] != v]
         if done and not moved:
             append_status(status_dir, stage, "labels already written; skipping")
-            print(f"[{stage}] already labeled. Use force=True to relabel.", flush=True)
             return pool_path
         if moved:
-            print(f"[{stage}] RELABEL: build parameters moved: {moved}", flush=True)
+            pass
 
     base = load_reports(cfg, cohort, "T0")
     lab = extract_findings(cfg, cohort, base, findings, status_dir)
@@ -110,9 +107,4 @@ def label_reports(cfg_path: str, cohort: str, force: bool = False) -> str:
     append_status(status_dir, stage,
                   f"wrote labels for {n_rows_with_any} of {len(merged)} rows, "
                   f"{covered:.1f}% of finding cells populated")
-    for f in findings:
-        v = pd.to_numeric(merged[f], errors="coerce")
-        print(f"[{stage}]   {f:30s} pos={int((v == 1).sum()):7d} neg={int((v == 0).sum()):7d} "
-              f"discarded={int(v.isna().sum()):7d}", flush=True)
-    print(f"[{stage}] {pool_path}", flush=True)
     return pool_path

@@ -5,15 +5,17 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
+import hashlib
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from Inference import rows as R
-from Inference.report_utils import _pack
-from Inference.stats_utils import BOOT_SEED, paired_bootstrap_statistic
+from Inference.report_utils import _pack_bootstrap, keep_p
+from Inference.stats_utils import BOOT_SEED, paired_bootstrap_statistic, _percentile_ci
+from Inference.selection_bootstrap import selective_bootstrap
 
 
 def decision_statistic(records: pd.DataFrame, name: str) -> np.ndarray:
@@ -51,12 +53,45 @@ def tpr_at_fpr(margin: np.ndarray, correct: np.ndarray, fpr: float) -> float:
 def _packed(stat_fn, arrays: List[np.ndarray], cluster_ids, n_boot: int) -> Dict:
     res = paired_bootstrap_statistic(arrays, stat_fn, cluster_ids=cluster_ids,
                                      n_boot=n_boot, seed=BOOT_SEED)
-    return _pack("v", res["point"], res["std"], res["ci_lower"], res["ci_upper"],
-                 res["n"], is_percent=True)
+    return _pack_bootstrap("v", res)
+
+
+def _selection_result(score, outcome, clusters, k, cfg):
+    budgets = list(cfg["instrument"]["budgets_k"])
+    budgets += [int(round(float(f)*len(score))) for f in cfg["instrument"].get("budget_curve_fracs", [])]
+    budgets.append(int(k))
+    return selective_bootstrap(score, outcome, clusters, budgets,
+                               n_boot=int(cfg["stats"]["n_boot"]), seed=BOOT_SEED)[int(k)]
 
 
 def _metric_row(packed: Dict, name: str, ident: Dict) -> Dict:
     return R._finish_metric(packed, "v", name, "percent", R._ident(**ident))
+
+
+def selective_row(score: np.ndarray, outcome: np.ndarray, clusters: np.ndarray, k: int,
+                  cfg: dict, name: str, ident: Dict) -> Dict:
+    packed = _pack_bootstrap("v", _selection_result(score, outcome, clusters, k, cfg))
+    return _metric_row(packed, name, {**ident, "budget_k": int(k)})
+
+
+def paired_selective_delta(score_a, outcome_a, score_b, outcome_b, clusters, k: int,
+                           cfg: dict, ident: Dict, name: str = "selective_precision") -> Dict:
+    a = _selection_result(score_a, outcome_a, clusters, k, cfg)
+    b = _selection_result(score_b, outcome_b, clusters, k, cfg)
+    boot = b["boot"] - a["boot"]
+    std, lo, hi = _percentile_ci(boot)
+    res = {"point": b["point"] - a["point"], "mean": float(boot.mean()),
+           "std": std, "ci_lower": lo, "ci_upper": hi, "n": len(score_a),
+           "n_boot_finite": int(np.isfinite(boot).sum()), "boot": boot}
+    packed = _pack_bootstrap("v", res)
+    boot, point = res.get("boot", np.array([])), res["point"]
+    if boot.size and np.isfinite(point):
+        p = float(np.mean(np.abs(boot - point) >= abs(point)))
+        packed["p_raw"] = keep_p(max(p, 1.0 / boot.size))
+    else:
+        packed["p_raw"] = float("nan")
+    return R._finish_metric(packed, "v", name, "percentage_points",
+                            R._ident(**{**ident, "budget_k": int(k)}))
 
 
 def run_instrument(records: pd.DataFrame, cfg: dict, extra_ident: Optional[Dict] = None) -> List[Dict]:
@@ -103,8 +138,7 @@ def run_instrument(records: pd.DataFrame, cfg: dict, extra_ident: Optional[Dict]
     for k in icfg["budgets_k"]:
         if k > len(records):
             continue
-        packed = _packed(lambda m, c, _k=k: selective_precision(m, c, _k),
-                         [margin, correct], clusters, n_boot)
+        packed = _pack_bootstrap("v", _selection_result(margin, correct, clusters, k, cfg))
         out.append(_metric_row(packed, "selective_precision", {**ident, "budget_k": int(k)}))
         hits = int(round(selective_precision(margin, correct, k) * k))
         out.append(R.raw_stat(hits, name="selective_hits", n=int(k),
@@ -119,8 +153,7 @@ def run_instrument(records: pd.DataFrame, cfg: dict, extra_ident: Optional[Dict]
         k = int(round(float(frac) * len(records)))
         if k < 1:
             continue
-        packed = _packed(lambda m, c, _k=k: selective_precision(m, c, _k),
-                         [margin, correct], clusters, n_boot)
+        packed = _pack_bootstrap("v", _selection_result(margin, correct, clusters, k, cfg))
         out.append(_metric_row(packed, "selective_precision",
                                {**ident, "budget_k": k, "budget_frac": float(frac)}))
 
@@ -169,13 +202,72 @@ def run_instrument(records: pd.DataFrame, cfg: dict, extra_ident: Optional[Dict]
         for k in icfg["budgets_k"]:
             if k > len(records):
                 continue
-            packed = _packed(lambda m, c, _k=k: selective_precision(m, c, _k),
-                             [alt, correct], clusters, n_boot)
+            packed = _pack_bootstrap("v", _selection_result(alt, correct, clusters, k, cfg))
             out.append(_metric_row(packed, "selective_precision",
                                    {**ident, "budget_k": int(k), "statistic": stat}))
     for row in out:
         if row.get("metric") == "selective_precision" and not row.get("statistic"):
             row["statistic"] = default_stat
+    return out
+
+
+def _query_uniform(case_ids: List[str], seed: int) -> np.ndarray:
+    out = np.empty(len(case_ids), dtype=float)
+    for i, cid in enumerate(case_ids):
+        h = hashlib.blake2b(f"{seed}|{cid}".encode(), digest_size=8).digest()
+        out[i] = int.from_bytes(h, "big") / float(1 << 64)
+    return out
+
+
+def run_openset_instrument(records: pd.DataFrame, cfg: dict,
+                           extra_ident: Optional[Dict] = None) -> List[Dict]:
+    icfg = cfg["instrument"]
+    ocfg = cfg.get("openset", {})
+    n_boot = int(cfg["stats"]["n_boot"])
+    ident = {
+        "model": records["model"].iloc[0], "cohort": records["cohort"].iloc[0],
+        "transform": records["transform"].iloc[0], "variant": records["variant"].iloc[0],
+        "split": records["split"].iloc[0],
+    }
+    ident.update(extra_ident or {})
+    unit = str(cfg["stats"].get("cluster_unit", "patient_id"))
+    if unit not in records.columns:
+        raise KeyError(f"stats.cluster_unit={unit!r} is not a column of the records")
+    clusters = records[unit].astype(str).to_numpy()
+
+    m_closed = records["margin"].to_numpy(dtype=float)
+    m_open = records["margin_open"].to_numpy(dtype=float)
+    correct = records["correct"].to_numpy(dtype=float)
+    u = _query_uniform(records["case_id"].astype(str).tolist(), int(ocfg.get("seed", 0)))
+    out: List[Dict] = []
+
+    both = np.isfinite(m_closed) & np.isfinite(m_open)
+    if int(both.sum()) >= 10:
+        n = int(both.sum())
+        out.append(R.auroc(np.concatenate([np.ones(n), np.zeros(n)]),
+                           np.concatenate([m_closed[both], m_open[both]]),
+                           name="openset_margin_auroc",
+                           cluster_ids=np.concatenate([clusters[both], clusters[both]]),
+                           n_boot=n_boot, **ident))
+    out.append(R.raw_stat(int((~np.isfinite(m_open)).sum()), name="openset_undefined_count",
+                          n=len(records), **ident))
+
+    fracs = [float(f) for f in ocfg.get("absent_fracs", [0.25, 0.5, 1.0])]
+    for frac in tqdm(fracs, desc=f"openset:{ident['cohort']}", unit="frac"):
+        absent = u < frac
+        obs = np.where(absent, m_open, m_closed)
+        hit = np.where(absent, 0.0, correct)
+        ok = np.isfinite(obs)
+        fid = {**ident, "absent_frac": frac}
+        out.append(R.raw_stat(float(absent[ok].mean()), name="openset_absent_share",
+                              n=int(ok.sum()), **fid))
+        for k in icfg["budgets_k"]:
+            if k > int(ok.sum()):
+                continue
+            out.append(selective_row(obs[ok], hit[ok], clusters[ok], k, cfg,
+                                     "selective_precision", fid))
+            out.append(selective_row(obs[ok], absent[ok].astype(float), clusters[ok], k, cfg,
+                                     "openset_false_match_rate", fid))
     return out
 
 

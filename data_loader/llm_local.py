@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import hashlib
 import json
 import os
@@ -21,7 +20,7 @@ from generation.model_wrappers import build_generation_prompt, split_reasoning
 from Inference.resume_utils import MissingInput
 
 
-_ALLOWED_BACKENDS = {"api", "vllm"}
+_ALLOWED_BACKENDS = {"api"}
 
 
 def assert_serving_ready(cfg: dict) -> str:
@@ -31,9 +30,6 @@ def assert_serving_ready(cfg: dict) -> str:
         raise ValueError(
             f"serving.backend is {backend!r}; this project allows only {sorted(_ALLOWED_BACKENDS)}. "
             "Sending report text to a third-party API would breach the PhysioNet agreement.")
-    if backend == "vllm":
-        return backend
-
     from generation.model_wrappers import resolve_secret
     url_env = serving.get("api_base_url_env", "CROSSMODALITY_API_BASE_URL")
     key_env = serving.get("api_key_env", "CROSSMODALITY_API_KEY")
@@ -45,15 +41,12 @@ def assert_serving_ready(cfg: dict) -> str:
         raise MissingInput(
             "the local LLM server is not configured, so this stage cannot generate anything: "
             + " and ".join(missing) + " is not set.\n"
-            "  This is a manual setup step:\n"
+            "  Serving the model is a manual step:\n"
             "    1. load " + str(cfg.get("llm", {}).get("served_name", "the model")) +
             " on your own serving proxy; the pipeline never loads or evicts a model there.\n"
             f"    2. export {url_env} and {key_env} in the job script, or paste the two values "
             "into the serving block of config.yaml.\n"
-            "  Set serving.backend: vllm instead to load the model in-process on this machine.")
-    print(f"[serving] backend={backend} model={cfg.get('llm', {}).get('served_name')} "
-          f"url={'from config' if not _is_placeholder_url(serving.get('api_base_url')) else '$' + url_env} "
-          f"concurrency={serving.get('concurrency')}", flush=True)
+            "")
     return backend
 
 
@@ -63,15 +56,12 @@ def _is_placeholder_url(v) -> bool:
 
 def build_llm(cfg: dict):
     serving = cfg.get("serving") or {}
-    backend = assert_serving_ready(cfg)
+    assert_serving_ready(cfg)
     spec = dict(cfg["llm"])
     gen_cfg = dict(cfg["llm"])
     token = cfg.get("hf_token")
-    if backend == "api":
-        from generation.model_wrappers import LocalServerModel
-        return LocalServerModel("crossmodal_llm", spec, gen_cfg, token, serving)
-    from generation.model_wrappers import build_local_model
-    return build_local_model("crossmodal_llm", spec, gen_cfg, token)
+    from generation.model_wrappers import LocalServerModel
+    return LocalServerModel("crossmodal_llm", spec, gen_cfg, token, serving)
 
 
 class ServerUnusable(RuntimeError):
@@ -136,7 +126,6 @@ def assert_thinking_configured(cfg: dict, model, probe_prompt: str) -> None:
     want = str(llm.get("thinking", "off"))
     group = llm.get("recipe_group")
     if want != "off":
-        print(f"[thinking] requested {want!r}; no off-check to run", flush=True)
         return
 
     on = build_generation_prompt(model.tokenizer, probe_prompt, group, "on")
@@ -165,7 +154,6 @@ def assert_thinking_configured(cfg: dict, model, probe_prompt: str) -> None:
             f"  Trace begins: {cot[:160]!r}")
     msg = (f"thinking OFF verified: the toggle changes the prompt, and one real completion came "
            f"back with no trace ({len(body)} characters of answer)")
-    print(f"[thinking] {msg}", flush=True)
     append_status(cfg["paths"]["status_dir"], "thinking_probe", f"{llm.get('served_name')}: {msg}")
 
 
@@ -257,7 +245,6 @@ def generate_sharded(cfg: dict, keys: List[str], prompts: List[str], out_path: s
         os.replace(fpath + ".tmp", fpath)
         msg = (f"{len(failures)} of {len(keys)} items failed permanently "
                f"({100.0 * len(failures) / max(len(keys), 1):.2f}%) and are listed in {fpath}")
-        print(f"[{stage}] {msg}", flush=True)
         append_status(status_dir, stage, msg)
     if not frames:
         raise MissingInput(f"{stage}: no shard produced any completion; check the serving backend")
@@ -400,7 +387,6 @@ def extract_findings(cfg: dict, cohort: str, base: pd.DataFrame, findings: List[
            f"{n_answered.mean():.1f} of {len(findings)} findings answered per study, "
            f"{100.0 * covered:.1f}% of finding cells populated")
     append_status(status_dir, stage, msg)
-    print(f"[{stage}] {msg}", flush=True)
 
     max_unanswered = float(cfg["llm"].get("max_unanswered_frac", 0.10))
     if unanswered > max_unanswered:

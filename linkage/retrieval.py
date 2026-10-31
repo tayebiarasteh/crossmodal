@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import hashlib
 import json
 import os
@@ -124,7 +123,6 @@ def build_linkage_records(cfg_path: str, model: str, cohorts: Optional[List[str]
                                       f"{cohort}/{transform}/{split}/{variant}: cached, skipping")
                         written.append(path)
                         continue
-                    print(f"[{stage}] REBUILD {os.path.basename(path)}: {moved}", flush=True)
 
                 sid_to_row = {s: i for i, s in enumerate(studies)}
                 true_row = np.array([sid_to_row.get(c2s.get(cid, ""), -1) for cid in q_ids], dtype=np.int64)
@@ -141,9 +139,7 @@ def build_linkage_records(cfg_path: str, model: str, cohorts: Optional[List[str]
                 max_rows = max(1, int(chunk_budget_gb * 1e9 / (4.0 * max(n_corpus, 1))))
                 chunk = min(chunk_cfg, max_rows)
                 if chunk < chunk_cfg:
-                    print(f"[{stage}] score chunk clamped from {chunk_cfg} to {chunk} rows "
-                          f"to stay under {chunk_budget_gb:.1f} GB at n_corpus={n_corpus}",
-                          flush=True)
+                    pass
                 Cd = torch.from_numpy(np.ascontiguousarray(C)).to(device)
                 n_q = len(q_ids)
                 rank_a = np.empty(n_q, dtype=np.int64)
@@ -199,7 +195,6 @@ def build_linkage_records(cfg_path: str, model: str, cohorts: Optional[List[str]
                            f"for the top score with a study that is not their own, which means two "
                            f"studies share identical report text. Counted as recovered, the "
                            f"conservative direction for a privacy claim.")
-                    print(f"[{stage}] {msg}", flush=True)
                     append_status(status_dir, stage, msg)
 
                 write_manifest(out, path)
@@ -212,7 +207,6 @@ def build_linkage_records(cfg_path: str, model: str, cohorts: Optional[List[str]
                               f"{cohort}/{transform}/{split}/{variant}: Recall@1 {r1:.3f}% "
                               f"against a chance of {100.0 / n_corpus:.4f}%")
                 written.append(path)
-                print(f"[{stage}] {path}", flush=True)
 
     return written
 

@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import gc
 import json
 import os
@@ -150,7 +149,6 @@ def train_heads(cfg_path: str, variant: str = "plain", force: bool = False,
 
     if os.path.exists(done_flag) and not force:
         append_status(status_dir, stage, "already trained; skipping")
-        print(f"[{stage}] already trained. Use force=True to retrain.", flush=True)
         return best_path
 
     device = device if torch.cuda.is_available() else "cpu"
@@ -192,7 +190,6 @@ def train_heads(cfg_path: str, variant: str = "plain", force: bool = False,
         append_status(status_dir, stage,
                       f"disruption control built, no training; validation selective precision "
                       f"{100 * val:.2f}%")
-        print(f"[{stage}] {best_path}", flush=True)
         return best_path
 
     heads = _build_heads(cfg, image_dim=ti.shape[1], text_dim=tt.shape[1])
@@ -217,7 +214,7 @@ def train_heads(cfg_path: str, variant: str = "plain", force: bool = False,
     sel_k = int(cfg["instrument"]["budgets_k"][1]) if len(cfg["instrument"]["budgets_k"]) > 1 else 100
 
     bank_i = bank_t = None
-    if private and str(vcfg.get("negatives", "fixed_bank")) == "fixed_bank":
+    if str(vcfg.get("negatives", "in_batch")) == "fixed_bank":
         n_bank = min(int(vcfg.get("negative_bank_size", 4096)), len(Vi))
         rng = np.random.RandomState(int(cfg["seed"]))
         sel = np.sort(rng.choice(len(Vi), size=n_bank, replace=False))
@@ -257,8 +254,6 @@ def train_heads(cfg_path: str, variant: str = "plain", force: bool = False,
                 "private": private, "lr": lr, "epochs": epochs, "batch": batch}
         moved = [k for k, v in want.items() if k in stored and stored[k] != v]
         if moved:
-            print(f"[{stage}] REFUSING the resume: the regime moved {moved}. Delete {out_dir} "
-                  "to retrain from scratch.", flush=True)
             raise ValueError(f"incompatible checkpoint regime: {moved}")
         if privacy_engine is not None:
             acc_state = ck.get("accountant")
@@ -292,7 +287,7 @@ def train_heads(cfg_path: str, variant: str = "plain", force: bool = False,
           for bi_, bt_ in tqdm(epoch_loader, desc=f"{stage} epoch {epoch + 1}/{epochs}"):
             opt.zero_grad(set_to_none=True)
             zi, zt = heads(bi_.to(device), bt_.to(device))
-            if private and bank_i is not None:
+            if bank_i is not None:
                 with torch.no_grad():
                     bz_i, bz_t = heads(bank_i, bank_t)
                 loss = fixed_bank_infonce(zi, zt, bz_t, bz_i, tau).mean()
@@ -321,7 +316,7 @@ def train_heads(cfg_path: str, variant: str = "plain", force: bool = False,
                         "epsilon": eps, "n_trainable": n_train,
                         "regime": {"variant": variant, "negatives": vcfg.get("negatives", "in_batch"),
                                    "private": private, "objective": (
-                                       "fixed_bank_decomposable" if (private and bank_i is not None)
+                                       "fixed_bank_decomposable" if bank_i is not None
                                        else "in_batch_not_decomposable"),
                                    "lr": lr, "epochs": epochs, "batch": batch,
                                    "selected_on": "valid_selective_precision"}},
@@ -352,7 +347,7 @@ def train_heads(cfg_path: str, variant: str = "plain", force: bool = False,
             "epsilon_patient_level_upper_bound": (
                 group_privacy_epsilon(privacy_engine.get_epsilon(float(vcfg["delta"])), max_per_patient)
                 if (privacy_engine and bool(vcfg.get("report_patient_level", True))) else None),
-            "objective": ("fixed_bank_decomposable" if (private and bank_i is not None)
+            "objective": ("fixed_bank_decomposable" if bank_i is not None
                           else "in_batch_not_decomposable"),
             "head_arch": {"image_dim": int(ti.shape[1]), "text_dim": int(tt.shape[1]),
                           "hidden_dim": int(hcfg.get("hidden_dim", 0)),
@@ -363,7 +358,6 @@ def train_heads(cfg_path: str, variant: str = "plain", force: bool = False,
         json.dump(meta, f, indent=2, sort_keys=True)
     os.replace(done_flag + ".tmp", done_flag)
     append_status(status_dir, stage, f"done: {json.dumps(meta)}")
-    print(f"[{stage}] {best_path}", flush=True)
     return best_path
 
 
@@ -414,5 +408,4 @@ def reembed_with_heads(cfg_path: str, variant: str = "plain", cohorts: Optional[
                 _save_cache(path, arr.cpu().numpy(), ids, p)
                 written.append(path)
             append_status(status_dir, stage, f"{cohort}/{split}: re-embedded {len(ids)} cases")
-    print(f"[{stage}] wrote {len(written)} caches", flush=True)
     return written

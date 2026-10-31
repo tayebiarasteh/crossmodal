@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -95,7 +94,7 @@ def run_zero_shot(cfg_path: str, variant: str = "off_shelf", force: bool = False
             row = R.auroc(y[ok], scores[ok, j], name="task_auroc", cluster_ids=clusters[ok],
                           **{**base, "finding": f})
             rows.append(row)
-            aurocs.append(row["mean_raw"] if np.isfinite(row.get("mean_raw", np.nan)) else np.nan)
+            aurocs.append(row["point_raw"] if np.isfinite(row.get("point_raw", np.nan)) else np.nan)
 
         vals = np.array([a for a in aurocs if np.isfinite(a)], dtype=float)
         if vals.size:
@@ -200,7 +199,7 @@ def run_linear_probe(cfg_path: str, variant: str = "off_shelf", force: bool = Fa
             row = R.auroc(ys["test"][1], st, name="task_auroc", cluster_ids=ys["test"][2],
                           **{**base, "finding": f})
             rows.append(row)
-            aurocs.append(row.get("mean_raw", np.nan))
+            aurocs.append(row.get("point_raw", np.nan))
 
         vals = np.array([a for a in aurocs if np.isfinite(a)], dtype=float)
         if vals.size:

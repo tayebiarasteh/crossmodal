@@ -5,7 +5,6 @@ Created on August 8, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import hashlib
 import json
 import os
@@ -68,7 +67,6 @@ def _txrv_predictions(cfg: dict, cfg_path: str, cohort: str, qmeta, findings: Li
         if not moved:
             append_status(status_dir, stage, f"{cohort}: cached TorchXRayVision predictions, skipping")
             return z["preds"]
-        print(f"[{stage}] REBUILD {os.path.basename(cache_path)}: {moved}", flush=True)
 
     import torch
     from PIL import Image
@@ -123,16 +121,13 @@ def build_baseline_records(cfg_path: str, baseline: str = "txrv_labels",
     min_pool = int(ccfg.get("min_pool_size", 2))
     cohorts = cohorts or [c for c, cc in cfg["cohorts"].items() if cc.get("enabled", True)]
 
-    if baseline == "metadata_only" and conditioning != "none":
-        raise KeyError(
-            "metadata_only cannot be conditioned: its matching attributes and the "
-            "conditioning attributes are the same information, so the result would be "
-            "degenerate. Run it unconditioned; its chance level IS the conditioned "
-            "reference the model is compared against.")
     if conditioning != "none" and conditioning not in ccfg["sets"]:
         raise KeyError(f"conditioning {conditioning!r} is not in config; "
                        f"available: {sorted(ccfg['sets'])}")
-    cond_attrs = [] if conditioning == "none" else list(ccfg["sets"][conditioning])
+    attrs = list(bcfg.get("attributes") or [])
+    if baseline == "metadata_only" and conditioning != "none":
+        attrs = list(ccfg["sets"][conditioning])
+    cond_attrs = [] if conditioning == "none" or baseline == "metadata_only" else list(ccfg["sets"][conditioning])
 
     written = []
     for cohort in cohorts:
@@ -151,7 +146,7 @@ def build_baseline_records(cfg_path: str, baseline: str = "txrv_labels",
         studies = sub.drop_duplicates("study_id")["study_id"].astype(str).tolist()
 
         want = {"baseline": baseline, "cohort": cohort, "split": split,
-                "attributes": list(bcfg.get("attributes") or []),
+                "attributes": attrs,
                 "match": bcfg.get("match"), "checkpoint": bcfg.get("checkpoint"),
                 "age_band_years": width, "findings": findings,
                 "conditioning": conditioning, "conditioning_attributes": cond_attrs,
@@ -167,7 +162,6 @@ def build_baseline_records(cfg_path: str, baseline: str = "txrv_labels",
                 append_status(status_dir, stage, f"{cohort}: cached, skipping")
                 written.append(path)
                 continue
-            print(f"[{stage}] REBUILD {os.path.basename(path)}: {moved}", flush=True)
 
         sid_to_row = {s: i for i, s in enumerate(studies)}
         slab = (sub.drop_duplicates("study_id").set_index("study_id")
@@ -186,9 +180,12 @@ def build_baseline_records(cfg_path: str, baseline: str = "txrv_labels",
                                       status_dir, stage, device,
                                       _preds_path(cfg, baseline, cohort, split), force)
 
-        attrs = list(bcfg.get("attributes") or [])
         need_views = ("view" in attrs) or ("view" in cond_attrs)
         view_sets = list(sattr["views"]) if need_views else None
+        view_masks = ({view: np.fromiter((view in views for views in view_sets),
+                                       dtype=bool, count=n_corpus)
+                       for view in qmeta["view"].astype(str).unique()}
+                      if need_views else {})
         attr_cols = {a: sattr[a].astype(str).to_numpy()
                      for a in set(attrs) | set(cond_attrs) if a != "view"}
         A = na = None
@@ -214,7 +211,7 @@ def build_baseline_records(cfg_path: str, baseline: str = "txrv_labels",
                 mask = np.ones(n_corpus, dtype=bool)
                 for a in attrs:
                     if a == "view":
-                        mask &= np.array([str(q["view"]) in vs for vs in view_sets])
+                        mask &= view_masks[str(q["view"])]
                     else:
                         mask &= (attr_cols[a] == str(q[a]))
                 mask[tr] = True
@@ -230,7 +227,7 @@ def build_baseline_records(cfg_path: str, baseline: str = "txrv_labels",
                 cmask = np.ones(n_corpus, dtype=bool)
                 for a in cond_attrs:
                     if a == "view":
-                        cmask &= np.array([str(q["view"]) in vs for vs in view_sets])
+                        cmask &= view_masks[str(q["view"])]
                     else:
                         cmask &= (attr_cols[a] == str(q[a]))
                 cmask[tr] = True
@@ -290,7 +287,6 @@ def build_baseline_records(cfg_path: str, baseline: str = "txrv_labels",
                       f"{100.0 * out['correct'].mean():.4f}% against a chance of "
                       f"{100.0 * chance:.4f}%")
         written.append(path)
-        print(f"[{stage}] {path}", flush=True)
     return written
 
 

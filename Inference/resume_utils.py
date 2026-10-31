@@ -5,7 +5,6 @@ Created on July 14, 2026
 @author: Soroosh Tayebi Arasteh
 https://github.com/tayebiarasteh
 """
-
 import json
 import os
 from typing import Callable, List, Optional
@@ -93,33 +92,25 @@ def run_units_resumable(
         append_status(status_dir, group,
                       f"{len(todo)} of {len(units)} units to compute "
                       f"({len(units) - len(todo)} already cached)")
-    print(f"[{group}] {len(todo)} of {len(units)} units to compute "
-          f"({len(units) - len(todo)} already cached).", flush=True)
 
     for unit in tqdm(units, desc=progress_desc or f"[{group}]", unit="unit"):
         if unit_done(partial_dir, group, unit):
             continue
-        print(f"[{group}] START unit {unit}", flush=True)
         if status_dir:
             append_status(status_dir, group, f"START unit {unit}")
         try:
             rows = compute_unit(unit)
-        except (MissingInput, FileNotFoundError) as e:
-            print(f"[{group}] SKIP  unit {unit}: input missing ({e}); will retry.",
-                  flush=True)
+        except (MissingInput, FileNotFoundError):
             if status_dir:
                 append_status(status_dir, group,
                               f"SKIP unit {unit}: input missing; will retry")
             continue
         if not rows:
-            print(f"[{group}] EMPTY unit {unit}: produced 0 rows; NOT caching it as "
-                  f"done, so it retries once its inputs exist.", flush=True)
             if status_dir:
                 append_status(status_dir, group,
                               f"EMPTY unit {unit}: 0 rows, not cached as done")
             continue
         write_unit_rows(partial_dir, group, unit, rows)
-        print(f"[{group}] DONE  unit {unit} -> {len(rows)} rows", flush=True)
         if status_dir:
             append_status(status_dir, group, f"DONE unit {unit}: {len(rows)} rows")
 
